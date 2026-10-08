@@ -10,12 +10,13 @@ walk a low-poly forest where goblins hide in the bushes.
 | Key | Action |
 |---|---|
 | WASD | Move |
-| Shift | Sprint (uses stamina) |
-| J | Attack |
+| Mouse | Turn the camera (the cursor locks to the game on the first click; Esc frees it) |
+| Right click / J | Attack |
+| Left click (hold) / K | Shield guard |
 | Space | Roll (invincible mid-roll) |
-| K (hold) | Shield guard |
-| Q / E or mouse drag | Turn the camera |
+| Shift | Sprint (uses stamina) |
 | Wheel | Zoom |
+| Q / E | Turn the camera (keyboard) |
 | F | Wireframe view |
 
 Kill goblins for points (small 1, medium 2, large 3). When you die, spend them on attack, defence or

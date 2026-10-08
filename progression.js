@@ -1,8 +1,8 @@
 // Simple growth system (deliberately self-contained, so it can be tuned or removed).
 //
-// - Killing a goblin gives points: small 1, mid 2, large 3. Points are saved at once and
-//   carry over between runs.
-// - After death the player spends points on attack / defence / stamina, then picks
+// - Kills give points: goblins small 0.5, mid 1, large 1.5; zombies 0.5. Points are saved at
+//   once and carry over between runs; one stat level costs 1 point.
+// - After death the player spends points on health / attack / defence / stamina, then picks
 //   "이어서 하기" (keep everything, next run uses the new stats) or "처음부터 시작" (wipe stats
 //   and points). Stats apply when the next run starts.
 // - Current stats are shown top right.
@@ -12,16 +12,18 @@
 // main.js falls back to "click to restart" without it.
 
 const KEY = "ethra.progression.v1";
-const POINTS = { small: 1, mid: 2, large: 3 };
+const POINTS = { small: 0.5, mid: 1, large: 1.5, zombie: 0.5 };
 const STATS = {
+  hp: { label: "체력", effect: (n) => `최대 체력 +${10 * n}` },
   atk: { label: "공격력", effect: (n) => `피해 +${4 * n}` },
   def: { label: "방어력", effect: (n) => `받는 피해 -${Math.round((1 - defenceMul(n)) * 100)}%` },
   sta: { label: "지구력", effect: (n) => `최대 지구력 +${8 * n}` },
 };
 function defenceMul(n) { return Math.max(0.4, 1 - 0.04 * n); }
+const fmt = (p) => (Number.isInteger(p) ? `${p}` : p.toFixed(1));   // half points show as 2.5
 
 function load() {
-  const empty = { points: 0, atk: 0, def: 0, sta: 0 };
+  const empty = { points: 0, hp: 0, atk: 0, def: 0, sta: 0 };
   try {
     return { ...empty, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
   } catch {
@@ -70,6 +72,10 @@ export const progression = {
   // called once at start: puts saved stats into the combat numbers
   apply(combat, hero) {
     const d = this.data;
+    hero.maxHp = 100 + 10 * d.hp;
+    hero.hp = hero.lag = hero.maxHp;
+    const hpBar = document.getElementById("hpBar");          // the health bar grows with the stat
+    if (hpBar) hpBar.style.width = `${300 * hero.maxHp / 100}px`;
     combat.heroDmg += 4 * d.atk;
     combat.damageTaken = defenceMul(d.def);
     combat.regen += 2 * d.sta;
@@ -82,8 +88,8 @@ export const progression = {
 
   onKill(kind) {
     const n = POINTS[kind] ?? 0;
-    this.data.points += n;
-    this.runGain += n;
+    this.data.points = Math.round((this.data.points + n) * 2) / 2;
+    this.runGain = Math.round((this.runGain + n) * 2) / 2;
     save(this.data);
     this.renderHud();
   },
@@ -102,7 +108,7 @@ export const progression = {
     const d = this.data;
     this.hud.innerHTML = `<h3>성장</h3>` +
       Object.entries(STATS).map(([k, s]) => `<div class="row"><span>${s.label}</span><b>${d[k]}</b></div>`).join("") +
-      `<div class="row pts"><span>포인트</span><b>${d.points}${this.runGain ? ` <span class="gain">(+${this.runGain})</span>` : ""}</b></div>`;
+      `<div class="row pts"><span>포인트</span><b>${fmt(d.points)}${this.runGain ? ` <span class="gain">(+${fmt(this.runGain)})</span>` : ""}</b></div>`;
   },
 
   // called on death: replaces "click to restart" with the spend screen
@@ -112,20 +118,20 @@ export const progression = {
     const box = document.createElement("div");
     box.id = "spend";
     msg.append(box);
-    const pending = { atk: 0, def: 0, sta: 0 };
+    const pending = { hp: 0, atk: 0, def: 0, sta: 0 };
     let free = this.data.points;
     let wipeArmed = false;
 
     const render = () => {
       box.innerHTML = `
-        <div class="head"><span>이번 판 획득 <b>+${this.runGain}</b></span><span>남은 포인트 <b>${free}</b></span></div>
+        <div class="head"><span>이번 판 획득 <b>+${fmt(this.runGain)}</b></span><span>남은 포인트 <b>${fmt(free)}</b></span></div>
         ${Object.entries(STATS).map(([k, s]) => {
           const lv = this.data[k] + pending[k];
           return `<div class="stat" data-k="${k}">
             <span>${s.label}</span>
             <span class="eff">${s.effect(lv)}</span>
             <span class="ctl"><button data-d="-1" ${pending[k] ? "" : "disabled"}>−</button>
-              <span class="lv">${lv}</span><button data-d="1" ${free ? "" : "disabled"}>+</button></span>
+              <span class="lv">${lv}</span><button data-d="1" ${free >= 1 ? "" : "disabled"}>+</button></span>
           </div>`;
         }).join("")}
         <div class="actions">

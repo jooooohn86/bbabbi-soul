@@ -48,7 +48,8 @@ composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
 // ---------- lighting ----------
-scene.add(new THREE.HemisphereLight("#e8f4ff", "#5b6b3a", 1.1));
+const hemi = new THREE.HemisphereLight("#e8f4ff", "#5b6b3a", 1.1);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight("#fff1d6", 2.2);
 sun.position.set(12, 20, 8);
 sun.castShadow = true;
@@ -71,6 +72,7 @@ let water = null;
 let spawn = new THREE.Vector3();
 
 async function loadWorld() {
+  heightmap = await fetch("assets/heightmap.json").then((r) => r.json());
   const gltf = await new GLTFLoader().loadAsync("assets/map.glb");
   const root = gltf.scene;
   root.updateMatrixWorld(true);
@@ -83,7 +85,9 @@ async function loadWorld() {
     if (o.isMesh) {
       const walkable = flag(o, "walkable"), isWater = flag(o, "water");
       const src = o.material;
-      o.material = new THREE.MeshToonMaterial({ color: src.color, gradientMap: ramp });
+      o.material = new THREE.MeshToonMaterial({
+        color: src.color, emissive: src.emissive, emissiveIntensity: src.emissiveIntensity ?? 1, gradientMap: ramp,
+      });
       o.castShadow = !walkable && !isWater;
       o.receiveShadow = true;
       if (!walkable && !isWater) props.push(o);
@@ -105,15 +109,22 @@ async function loadWorld() {
   scene.add(root);
 }
 
-const ray = new THREE.Raycaster();
-const down = new THREE.Vector3(0, -1, 0);
+// Ground height comes from heightmap.json (build_map.py samples the terrain's own height function
+// on a 1 m grid): a bilinear lookup instead of a raycast, cheap enough for a crowd of monsters.
+let heightmap = null;
 const groundNormal = new THREE.Vector3(0, 1, 0);   // surface normal under the last groundY() sample
 function groundY(x, z) {
-  ray.set(new THREE.Vector3(x, 50, z), down);
-  const hit = ray.intersectObjects(terrain, false)[0];
-  if (!hit) return null;   // off the terrain: callers keep their current height
-  groundNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
-  return hit.point.y;
+  if (!heightmap) return null;
+  const { origin, step, n, h } = heightmap;
+  const fx = (x - origin) / step, fy = (-z - origin) / step;    // the map's Blender y is three.js -z
+  if (fx < 0 || fy < 0 || fx > n - 1 || fy > n - 1) return null; // off the map: callers keep their height
+  const i = Math.min(n - 2, Math.floor(fx)), j = Math.min(n - 2, Math.floor(fy));
+  const u = fx - i, v = fy - j;
+  const h00 = h[j * n + i], h10 = h[j * n + i + 1], h01 = h[(j + 1) * n + i], h11 = h[(j + 1) * n + i + 1];
+  const dhx = ((h10 - h00) * (1 - v) + (h11 - h01) * v) / step;
+  const dhy = ((h01 - h00) * (1 - u) + (h11 - h10) * u) / step;
+  groundNormal.set(-dhx, 1, dhy).normalize();
+  return h00 * (1 - u) * (1 - v) + h10 * u * (1 - v) + h01 * (1 - u) * v + h11 * u * v;
 }
 
 // ---------- 8-direction sprite character ----------
@@ -170,6 +181,7 @@ class SpriteCharacter {
     this.oneShot = null;  // {name, t} while a play-once motion (attack, shoot) runs
     this.shown = "";      // state on screen last frame
     this.frame = 0;       // frame index on screen (enemies time their shots off it)
+    this.animRate = 1;    // scales looping motions (zombies shamble slowly)
     this.stateTime = 0;   // time since that state started (entry frames play from 0)
     this.sector = 0;
   }
@@ -219,7 +231,7 @@ class SpriteCharacter {
       anim = this.atlas.anims[`${view}_${state}`] ?? this.atlas.anims[`${view}_idle`];
       // frames before loopFrom play once on entry (raising the guard), the rest loop
       const n = anim.frames.length, from = anim.loopFrom ?? 0;
-      fi = Math.floor(this.stateTime * anim.fps);
+      fi = Math.floor(this.stateTime * anim.fps * this.animRate);
       if (fi >= n) fi = from + ((fi - from) % (n - from));
     }
     this.frame = fi;
@@ -311,7 +323,16 @@ const GOBLINS = {
            hp: 180, dmg: 12, hitFrame: 3, atkSpeed: 0.75, poise: 1, barY: 2.0, barW: 0.8 },
   large: { detect: 8, speed: 2.4, radius: 0.60, blob: 0.62, bush: 1.6, reach: 0.9, cooldown: 2.4,
            hp: 450, dmg: 30, hitFrame: 3, atkSpeed: 0.55, poise: 2, barY: 3.15, barW: 1.2 },
+  // zombies: no bush; they wander the infected zone in numbers, slow but many.
+  // giveUp: hero this far away and they lose interest and wander where they are
+  zombie: { detect: 9, speed: 1.9, radius: 0.32, blob: 0.36, bush: 0, reach: 0.5, cooldown: 1.5,
+            hp: 100, dmg: 9, hitFrame: 3, atkSpeed: 0.8, poise: 1, barY: 2.0, barW: 0.8,
+            wander: true, wanderSpeed: 0.6, giveUp: 20, animRate: 0.55 },
 };
+for (const k of ["small", "mid", "large"]) GOBLINS[k].atlas = `goblin_${k}`;
+GOBLINS.zombie.atlas = "zombie";
+const ZOMBIE_COUNT = 90;
+const CULL = 46;           // monsters farther than this from the hero are hidden and skipped
 // wanted hideouts (x, z); each is moved to the nearest free, dry, off-path spot at load
 const HIDEOUTS = [
   ["small", -6, 14], ["small", -7.5, 15.5], ["mid", 13, -9], ["large", -15, -10],
@@ -379,29 +400,33 @@ class Goblin {
     this.kind = kind;
     this.cfg = GOBLINS[kind];
     this.sprite = new SpriteCharacter(atlas, tex, { blobRadius: this.cfg.blob });
+    this.sprite.animRate = this.cfg.animRate ?? 1;
     this.home = new THREE.Vector3(x, groundY(x, z) ?? 0, z);
-    this.bush = makeBush(this.cfg.bush);
-    this.bush.position.copy(this.home);
+    this.bush = this.cfg.bush ? makeBush(this.cfg.bush) : null;
+    if (this.bush) { this.bush.position.copy(this.home); scene.add(this.bush); }
     this.bar = makeHealthBar(this.cfg.barW);
     this.bar.position.y = this.cfg.barY;
     this.sprite.root.add(this.bar);
-    scene.add(this.bush, this.sprite.root);
+    scene.add(this.sprite.root);
     this.shake = 0;
     this.hide();
   }
 
   get alive() { return this.state === "hunt"; }
 
-  // back in the bush at full health (also the respawn after a death)
+  // back in the bush (zombies: back at their spot, wandering) at full health; also the respawn
   hide() {
-    this.state = "hidden";
+    this.state = this.cfg.wander ? "wander" : "hidden";
+    this.anchor = this.home.clone();
+    this.wanderTo = null;
+    this.wanderWait = Math.random() * 2;
     this.hp = this.cfg.hp;
     this.hits = 0;
     this.stagger = 0;
     this.flash = 0;
     this.cooldown = 0;
     const s = this.sprite;
-    s.root.visible = false;
+    s.root.visible = !!this.cfg.wander;
     s.root.position.copy(this.home);
     s.oneShot = null;
     s.mat.opacity = 1;
@@ -445,8 +470,37 @@ class Goblin {
     }
   }
 
+  // a slow aimless shuffle around its anchor, pausing now and then
+  wander(dt) {
+    const s = this.sprite, p = s.root.position;
+    if (this.wanderWait > 0) { this.wanderWait -= dt; s.state = "idle"; return; }
+    if (!this.wanderTo || p.distanceTo(this.wanderTo) < 0.3) {
+      const a = Math.random() * Math.PI * 2, r = 1 + Math.random() * 3.5;
+      this.wanderTo = this.anchor.clone().add(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r));
+      this.wanderWait = 1 + Math.random() * 2.5;
+      return;
+    }
+    const to = this.wanderTo.clone().sub(p).setY(0).normalize();
+    p.addScaledVector(to, this.cfg.wanderSpeed * dt);
+    let df = Math.atan2(to.x, to.z) - s.facing;
+    df = Math.atan2(Math.sin(df), Math.cos(df));
+    s.facing += df * Math.min(1, dt * 4);
+    s.state = "run";
+  }
+
+  // pushed out of props, kept on the map and on the ground
+  settle(dt) {
+    const s = this.sprite, p = s.root.position;
+    pushOut(p, this.cfg.radius);
+    p.x = THREE.MathUtils.clamp(p.x, -LIMIT, LIMIT);
+    p.z = THREE.MathUtils.clamp(p.z, -LIMIT, LIMIT);
+    const gy = groundY(p.x, p.z);
+    if (gy !== null) p.y = THREE.MathUtils.lerp(p.y, gy, Math.min(1, dt * 20));
+    s.blob.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), groundNormal);
+  }
+
   update(dt, heroPos) {
-    if (this.shake > 0) {                                   // bush rustles when it bursts out
+    if (this.shake > 0 && this.bush) {                      // bush rustles when it bursts out
       this.shake -= dt;
       this.bush.rotation.z = Math.sin(this.shake * 40) * 0.12 * Math.max(0, this.shake / 0.6);
     }
@@ -454,6 +508,19 @@ class Goblin {
     if (this.state === "hidden") {
       if (!H.dead && heroPos.distanceTo(this.home) < cfg.detect) this.emerge(heroPos);
       return;
+    }
+    if (this.state === "wander") {
+      const far = heroPos.distanceTo(p) > CULL;
+      s.root.visible = !far;                                // a far-off crowd costs nothing
+      if (far) return;
+      if (!H.dead && heroPos.distanceTo(p) < cfg.detect) {
+        this.state = "hunt";
+        this.cooldown = 0.5;
+      } else {
+        this.wander(dt);
+        this.settle(dt);
+        return;
+      }
     }
     // hero gone far away: back into hiding (a dead goblin respawns this way)
     if (heroPos.distanceTo(this.home) > LEASH && heroPos.distanceTo(p) > 22) { this.hide(); return; }
@@ -474,6 +541,13 @@ class Goblin {
     to.normalize();
     this.cooldown -= dt;
     let move = 0;
+    if (cfg.giveUp && dist > cfg.giveUp && !s.attacking) {   // lost the hero: wander where it stands
+      this.state = "wander";
+      this.anchor = p.clone();
+      this.wanderTo = null;
+      this.bar.visible = false;
+      return;
+    }
 
     if (this.stagger > 0) {
       this.stagger -= dt;
@@ -520,12 +594,7 @@ class Goblin {
     } else {
       s.state = "idle";
     }
-    pushOut(p, cfg.radius);
-    p.x = THREE.MathUtils.clamp(p.x, -LIMIT, LIMIT);
-    p.z = THREE.MathUtils.clamp(p.z, -LIMIT, LIMIT);
-    const gy = groundY(p.x, p.z);
-    if (gy !== null) p.y = THREE.MathUtils.lerp(p.y, gy, Math.min(1, dt * 20));
-    s.blob.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), groundNormal);
+    this.settle(dt);
   }
 }
 
@@ -610,7 +679,7 @@ function updateEnemies(dt, heroPos) {
 async function loadEnemies() {
   const kinds = Object.keys(GOBLINS);
   const assets = await Promise.all(kinds.map(async (k) => {
-    const atlas = await fetch(`assets/goblin_${k}.json`).then((r) => r.json());
+    const atlas = await fetch(`assets/${GOBLINS[k].atlas}.json`).then((r) => r.json());
     const tex = await new THREE.TextureLoader().loadAsync(`assets/${atlas.image}`);
     return [k, { atlas, tex }];
   }));
@@ -623,6 +692,23 @@ async function loadEnemies() {
     const tex = byKind[kind].tex.clone();
     tex.needsUpdate = true;
     enemies.push(new Goblin(kind, byKind[kind].atlas, tex, fx, fz));
+  }
+  // zombies: scattered over the infected ring (fixed seed, so the same layout every game)
+  let seed = 5;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  const spots = [];
+  for (let t = 0; t < 6000 && spots.length < ZOMBIE_COUNT; t++) {
+    const x = (rand() * 2 - 1) * 42, z = (rand() * 2 - 1) * 42;
+    const r = Math.max(Math.abs(x), Math.abs(z));
+    if (r < 27.5 || r > 42.5 || groundY(x, z) === null) continue;
+    if (!colliders.every((c) => Math.hypot(x - c.x, z - c.z) > c.r + 0.7)) continue;
+    if (!spots.every((q) => Math.hypot(x - q[0], z - q[1]) > 1.6)) continue;
+    spots.push([x, z]);
+  }
+  for (const [x, z] of spots) {
+    const tex = byKind.zombie.tex.clone();
+    tex.needsUpdate = true;
+    enemies.push(new Goblin("zombie", byKind.zombie.atlas, tex, x, z));
   }
 }
 
@@ -729,6 +815,61 @@ function updateBirds(dt, center) {
   }
 }
 
+// ---------- atmosphere: the sky, fog and light sicken as the hero walks into the infected zone ----------
+const ZONE = {
+  sky: [new THREE.Color("#9fd3e8"), new THREE.Color("#2a2533")],
+  hemiSky: [new THREE.Color("#e8f4ff"), new THREE.Color("#9c8fb5")],
+  hemiGround: [new THREE.Color("#5b6b3a"), new THREE.Color("#2e2a26")],
+  sun: [new THREE.Color("#fff1d6"), new THREE.Color("#c3d4a0")],
+};
+let zone = 0;                // 0 forest .. 1 infected (smoothed)
+const tmpColor = new THREE.Color();
+function updateAtmosphere(dt, p) {
+  const r = Math.max(Math.abs(p.x), Math.abs(p.z));
+  const target = THREE.MathUtils.smoothstep(r, 19, 28);
+  zone += (target - zone) * Math.min(1, dt * 1.5);
+  const mix = (pair) => tmpColor.copy(pair[0]).lerp(pair[1], zone);
+  if (!wire) { scene.background.copy(mix(ZONE.sky)); scene.fog.color.copy(scene.background); }
+  scene.fog.near = THREE.MathUtils.lerp(28, 12, zone);
+  scene.fog.far = THREE.MathUtils.lerp(60, 38, zone);
+  hemi.color.copy(mix(ZONE.hemiSky));
+  hemi.groundColor.copy(mix(ZONE.hemiGround));
+  hemi.intensity = THREE.MathUtils.lerp(1.1, 0.6, zone);
+  sun.color.copy(mix(ZONE.sun));
+  sun.intensity = THREE.MathUtils.lerp(2.2, 1.0, zone);
+  updateSpores(dt, p);
+}
+
+// drifting spores around the hero, only visible in the infected zone
+const SPORES = 350, SPORE_BOX = 20;
+const sporeGeo = new THREE.BufferGeometry();
+const sporePos = new Float32Array(SPORES * 3);
+for (let i = 0; i < SPORES; i++) {
+  sporePos[i * 3] = (Math.random() * 2 - 1) * SPORE_BOX;
+  sporePos[i * 3 + 1] = Math.random() * 8;
+  sporePos[i * 3 + 2] = (Math.random() * 2 - 1) * SPORE_BOX;
+}
+sporeGeo.setAttribute("position", new THREE.BufferAttribute(sporePos, 3));
+const sporeMat = new THREE.PointsMaterial({ color: "#b8ff7a", size: 0.09, transparent: true, opacity: 0,
+  depthWrite: false, blending: THREE.AdditiveBlending });
+const spores = new THREE.Points(sporeGeo, sporeMat);
+spores.frustumCulled = false;
+scene.add(spores);
+function updateSpores(dt, p) {
+  sporeMat.opacity = zone * 0.85;
+  spores.visible = zone > 0.02;
+  if (!spores.visible) return;
+  spores.position.set(p.x, p.y, p.z);              // the cloud travels with the hero
+  const t = performance.now() / 1000;
+  for (let i = 0; i < SPORES; i++) {
+    const k = i * 3;
+    sporePos[k + 1] += dt * (0.25 + (i % 5) * 0.06);
+    sporePos[k] += Math.sin(t * 0.7 + i) * dt * 0.15;
+    if (sporePos[k + 1] > 8) sporePos[k + 1] = 0;
+  }
+  sporeGeo.attributes.position.needsUpdate = true;
+}
+
 // ---------- wireframe toggle (button or F key) ----------
 const wireBtn = document.getElementById("wireBtn");
 let wire = false;
@@ -826,7 +967,7 @@ function updateHud(dt) {
 }
 
 // ---------- main ----------
-const LIMIT = 21;
+const LIMIT = 45;
 let hero;
 
 function step(dt) {
@@ -956,6 +1097,7 @@ function step(dt) {
 
   fadeOccluders(look);
   updateBirds(dt, p);
+  updateAtmosphere(dt, p);
   updateEnemies(dt, p);
   for (const g of enemies) if (g.sprite.root.visible) g.sprite.update(dt, camera);
   if (dog) { dog.update(dt, p, hero.facing); dog.sprite.update(dt, camera); }

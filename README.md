@@ -1,7 +1,8 @@
 # Bbabbi Soul
 
 A small soulslike action game in the browser: an 8-direction pixel-sprite knight and his papillon
-walk a low-poly forest where goblins hide in the bushes.
+walk a low-poly forest where goblins hide in the bushes. Past the ridge around it lies the infected
+zone: dead trees, toxic pools, glowing crystals and a crowd of zombies.
 
 **Play:** https://jooooohn86.github.io/bbabbi-soul/
 
@@ -18,8 +19,9 @@ walk a low-poly forest where goblins hide in the bushes.
 | Wheel | Zoom |
 | F | Wireframe view |
 
-Kill goblins for points (small 1, medium 2, large 3). When you die, spend them on attack, defence or
-stamina, then continue, or wipe everything and start over. Progress is saved in your browser.
+Kills give points (goblins: small 0.5, medium 1, large 1.5; zombies 0.5). When you die, spend them on
+health, attack, defence or stamina (1 point per level), then continue, or wipe everything and start
+over. Progress is saved in your browser.
 
 ## How it is made
 

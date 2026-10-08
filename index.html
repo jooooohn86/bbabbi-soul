@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bbabbi Soul</title>
+<style>
+  :root { --bg: #1b2130; --fg: #f1ead8; --panel: rgba(20, 24, 34, 0.72); }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  canvas#view { position: fixed; inset: 0; width: 100vw; height: 100vh; image-rendering: pixelated; display: block; }
+
+  /* health and stamina, top left */
+  #bars { position: fixed; left: 16px; top: 16px; display: grid; gap: 6px; pointer-events: none; }
+  .bar { position: relative; height: 12px; background: rgba(10, 12, 18, 0.8);
+    border: 1px solid rgba(241, 234, 216, 0.35); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); }
+  .bar > span { position: absolute; left: 0; top: 0; bottom: 0; }
+  #hpBar { width: 300px; }
+  #stBar { width: 240px; }
+  #hpLag { background: #e8c25a; }
+  #hpFill { background: linear-gradient(#c8473f, #8e2621); }
+  #stFill { background: linear-gradient(#5fae58, #3b7a35); }
+  #stBar.empty { border-color: #c8473f; }
+
+  #hud {
+    position: fixed; left: 16px; bottom: 16px; padding: 10px 14px; border-radius: 6px;
+    background: var(--panel); color: var(--fg); font: 13px/1.6 "Pretendard", system-ui, sans-serif;
+    user-select: none; pointer-events: none;
+  }
+  #hud b { color: #ffd479; font-weight: 600; }
+  #wireBtn {
+    position: fixed; right: 16px; top: 52px; padding: 8px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid rgba(255, 212, 121, 0.5); background: var(--panel); color: var(--fg);
+    font: 600 13px "Pretendard", system-ui, sans-serif;
+  }
+  #wireBtn:hover { border-color: #ffd479; }
+  #wireBtn.on { background: #ffd479; color: #1b2130; }
+  #dir { position: fixed; right: 16px; top: 16px; padding: 6px 10px; border-radius: 6px;
+    background: var(--panel); color: var(--fg); font: 12px ui-monospace, monospace; }
+
+  /* title screen: any click or key starts (inside an embedded frame the click also gives keyboard focus) */
+  #cover { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; pointer-events: none;
+    background: rgba(12, 14, 20, 0.62); color: var(--fg); text-align: center;
+    font: 15px "Pretendard", system-ui, sans-serif; }
+  #cover[hidden] { display: none; }
+  #cover h2 { margin: 0 0 10px; font: 400 clamp(36px, 7vw, 72px) "Times New Roman", Georgia, serif; letter-spacing: 0.1em; }
+  #cover p { margin: 6px 0; }
+  #cover .keys { color: rgba(241, 234, 216, 0.6); font-size: 13px; }
+
+  /* death: the screen darkens over 2 s, then YOU DIED; a click restarts */
+  #death { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none;
+    background: rgba(0, 0, 0, 0); transition: background 2s ease-in; }
+  #death.show { background: rgba(0, 0, 0, 0.78); pointer-events: auto; cursor: pointer; }
+  #death .msg { text-align: center; opacity: 0; transition: opacity 1.2s ease-out 1.4s; }
+  #death.show .msg { opacity: 1; }
+  #death h1 { margin: 0; font: 400 clamp(48px, 9vw, 112px) "Times New Roman", Georgia, serif;
+    letter-spacing: 0.12em; color: #a3201b; text-shadow: 0 0 24px rgba(163, 32, 27, 0.45); }
+  #death p { margin: 18px 0 0; color: rgba(241, 234, 216, 0.6); font: 14px "Pretendard", system-ui, sans-serif; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="bars">
+  <div class="bar" id="hpBar"><span id="hpLag"></span><span id="hpFill"></span></div>
+  <div class="bar" id="stBar"><span id="stFill"></span></div>
+</div>
+<div id="hud">
+  <b>WASD</b> 이동 · <b>Shift</b> 달리기 · <b>Space</b> 구르기<br>
+  <b>J</b> 공격 · <b>K</b> 누르고 있기: 방어<br>
+  <b>Q / E</b> 또는 <b>마우스 드래그</b> 카메라 회전<br>
+  <b>휠</b> 줌 · <b>P</b> 픽셀 크기 전환 · <b>F</b> 와이어프레임
+</div>
+<div id="dir"></div>
+<button id="wireBtn" type="button">와이어프레임 보기</button>
+<div id="death"><div class="msg"><h1>YOU DIED</h1><p>클릭하면 처음부터 다시 시작합니다</p></div></div>
+<div id="cover"><div><h2>Bbabbi Soul</h2><p>화면을 클릭하거나 아무 키나 누르면 시작합니다</p>
+<p class="keys">WASD 이동 · J 공격 · Space 구르기 · K 방어 · 드래그 카메라</p></div></div>
+<script>
+  const cover = document.getElementById("cover");
+  const start = () => { cover.hidden = true; window.focus(); };
+  addEventListener("pointerdown", start, { capture: true, once: true });
+  addEventListener("keydown", start, { capture: true, once: true });
+</script>
+<script type="module" src="main.js"></script>
+</body>
+</html>

@@ -15,13 +15,16 @@ zone: dead trees, toxic pools, glowing crystals and a crowd of zombies.
 | Right click (hold) / K | Shield guard |
 | Pointer at the left / right screen edge | Turn the camera (also middle-button drag, or Q / E) |
 | Space | Roll (invincible mid-roll) |
+| F | Special skill (uses mind) |
+| 1 / 2 / 3 | Pick the special skill |
 | Shift | Sprint (uses stamina) |
 | Wheel | Zoom |
-| F | Wireframe view |
+| G | Wireframe view |
 
 Kills give points (goblins: small 0.5, medium 1, large 1.5; zombies 0.5). When you die, spend them on
-health, attack, defence or stamina (1 point per level), then continue, or wipe everything and start
-over. Progress is saved in your browser.
+health, attack, defence, stamina or mind (1 point per level) and unlock special skills (spin slash,
+piercing thrust, shockwave; 20 points for the first, +10 for each after), then continue, or wipe
+everything and start over. Progress is saved in your browser.
 
 ## How it is made
 

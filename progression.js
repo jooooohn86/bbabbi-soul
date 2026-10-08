@@ -2,14 +2,16 @@
 //
 // - Kills give points: goblins small 0.5, mid 1, large 1.5; zombies 0.5. Points are saved at
 //   once and carry over between runs; one stat level costs 1 point.
-// - After death the player spends points on health / attack / defence / stamina, then picks
-//   "이어서 하기" (keep everything, next run uses the new stats) or "처음부터 시작" (wipe stats
-//   and points). Stats apply when the next run starts.
-// - Current stats are shown top right.
+// - After death the player spends points on health / attack / defence / stamina / mind and
+//   unlocks special skills (skills.js), then picks "이어서 하기" (keep everything, next run uses
+//   the new stats) or "처음부터 시작" (wipe stats, skills and points). Stats apply when the next
+//   run starts.
+// - Current stats are shown top right; the equipped skill is remembered between runs.
 //
-// To tune: change POINTS and STATS below.
-// To remove: delete this file, then delete the lines tagged [progression] in main.js.
-// main.js falls back to "click to restart" without it.
+// To tune: change POINTS and STATS below (skill prices live in skills.js).
+// To remove: delete this file, then delete its import line in main.js (tagged [progression]).
+// main.js falls back to "click to restart" without it, and no skill can be used.
+import { SKILLS, MIND_BASE, unlockCost } from "./skills.js";
 
 const KEY = "ethra.progression.v1";
 const POINTS = { small: 0.5, mid: 1, large: 1.5, zombie: 0.5 };
@@ -18,12 +20,13 @@ const STATS = {
   atk: { label: "공격력", effect: (n) => `피해 +${4 * n}` },
   def: { label: "방어력", effect: (n) => `받는 피해 -${Math.round((1 - defenceMul(n)) * 100)}%` },
   sta: { label: "지구력", effect: (n) => `최대 지구력 +${8 * n}` },
+  mind: { label: "정신력", effect: (n) => `최대 정신력 +${10 * n}` },
 };
 function defenceMul(n) { return Math.max(0.4, 1 - 0.04 * n); }
 const fmt = (p) => (Number.isInteger(p) ? `${p}` : p.toFixed(1));   // half points show as 2.5
 
 function load() {
-  const empty = { points: 0, hp: 0, atk: 0, def: 0, sta: 0 };
+  const empty = { points: 0, hp: 0, atk: 0, def: 0, sta: 0, mind: 0, skills: [], equipped: null };
   try {
     return { ...empty, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
   } catch {
@@ -44,14 +47,20 @@ const css = `
 #growth .pts { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(241, 234, 216, 0.15); color: #ffd479; }
 #growth .gain { color: #8fd18a; }
 
-#spend { margin: 28px auto 0; width: min(420px, calc(100vw - 32px)); opacity: 0; transition: opacity 0.8s ease-out 2.2s;
-  color: #f1ead8; font: 14px "Pretendard", system-ui, sans-serif; text-align: left; }
+#spend { margin: 24px auto 0; width: min(460px, calc(100vw - 32px)); opacity: 0; transition: opacity 0.8s ease-out 2.2s;
+  color: #f1ead8; font: 14px "Pretendard", system-ui, sans-serif; text-align: left;
+  max-height: calc(100vh - 260px); overflow-y: auto; }
 #death.show #spend { opacity: 1; }
 #spend .head { display: flex; justify-content: space-between; margin-bottom: 10px; color: rgba(241, 234, 216, 0.75); }
 #spend .head b { color: #ffd479; font-weight: 600; }
-#spend .stat { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 12px;
+#spend h4 { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: rgba(241, 234, 216, 0.6); letter-spacing: 0.04em; }
+#spend .stat, #spend .skill { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 12px;
   padding: 8px 12px; margin-bottom: 6px; background: rgba(241, 234, 216, 0.06); border-radius: 6px; }
-#spend .stat .eff { color: rgba(241, 234, 216, 0.6); font-size: 12px; }
+#spend .skill { grid-template-columns: 22px 1fr auto; }
+#spend .skill .num { color: #8fb8ff; font-weight: 600; }
+#spend .skill .name { font-weight: 600; }
+#spend .skill .eff, #spend .stat .eff { color: rgba(241, 234, 216, 0.6); font-size: 12px; }
+#spend .skill.owned .tag { color: #8fd18a; font-size: 12px; font-weight: 600; }
 #spend .stat .ctl { display: flex; align-items: center; gap: 8px; }
 #spend .stat .lv { min-width: 22px; text-align: center; font-weight: 600; }
 #spend button { font: 600 13px "Pretendard", system-ui, sans-serif; color: #f1ead8; cursor: pointer;
@@ -59,6 +68,8 @@ const css = `
 #spend button:hover:not(:disabled) { border-color: #ffd479; }
 #spend button:disabled { opacity: 0.3; cursor: default; }
 #spend .ctl button { width: 26px; height: 26px; padding: 0; }
+#spend .skill button { padding: 5px 10px; white-space: nowrap; }
+#spend .skill button.pending { background: #8fb8ff; color: #1b2130; border-color: #8fb8ff; }
 #spend .actions { display: flex; gap: 10px; margin-top: 16px; }
 #spend .actions button { flex: 1; padding: 10px; }
 #spend .actions .go { background: #ffd479; color: #1b2130; border-color: #ffd479; }
@@ -74,16 +85,37 @@ export const progression = {
     const d = this.data;
     hero.maxHp = 100 + 10 * d.hp;
     hero.hp = hero.lag = hero.maxHp;
-    const hpBar = document.getElementById("hpBar");          // the health bar grows with the stat
-    if (hpBar) hpBar.style.width = `${300 * hero.maxHp / 100}px`;
     combat.heroDmg += 4 * d.atk;
     combat.damageTaken = defenceMul(d.def);
     combat.regen += 2 * d.sta;
     hero.maxSt = 100 + 8 * d.sta;
     hero.st = hero.maxSt;
-    const stBar = document.getElementById("stBar");          // the stamina bar grows with the stat
-    if (stBar) stBar.style.width = `${240 * hero.maxSt / 100}px`;
+    hero.maxMind = MIND_BASE + 10 * d.mind;
+    hero.mind = hero.maxMind;
+    // the bars grow with their stats
+    const widen = (id, base, value, full) => {
+      const el = document.getElementById(id);
+      if (el) el.style.width = `${base * value / full}px`;
+    };
+    widen("hpBar", 300, hero.maxHp, 100);
+    widen("stBar", 240, hero.maxSt, 100);
+    widen("mpBar", 240, hero.maxMind, MIND_BASE);
     this.mountHud();
+  },
+
+  // skills the player has unlocked, in SKILLS order
+  unlocked() {
+    return SKILLS.filter((s) => this.data.skills.includes(s.id)).map((s) => s.id);
+  },
+  equipped() {
+    const own = this.unlocked();
+    return own.includes(this.data.equipped) ? this.data.equipped : own[0] ?? null;
+  },
+  equip(id) {
+    if (!this.data.skills.includes(id)) return false;
+    this.data.equipped = id;
+    save(this.data);
+    return true;
   },
 
   onKill(kind) {
@@ -118,9 +150,11 @@ export const progression = {
     const box = document.createElement("div");
     box.id = "spend";
     msg.append(box);
-    const pending = { hp: 0, atk: 0, def: 0, sta: 0 };
+    const pending = { hp: 0, atk: 0, def: 0, sta: 0, mind: 0 };
+    const unlocking = [];                                    // skills picked this time, in order
     let free = this.data.points;
     let wipeArmed = false;
+    const owned = () => this.data.skills.length + unlocking.length;
 
     const render = () => {
       box.innerHTML = `
@@ -132,6 +166,18 @@ export const progression = {
             <span class="eff">${s.effect(lv)}</span>
             <span class="ctl"><button data-d="-1" ${pending[k] ? "" : "disabled"}>−</button>
               <span class="lv">${lv}</span><button data-d="1" ${free >= 1 ? "" : "disabled"}>+</button></span>
+          </div>`;
+        }).join("")}
+        <h4>특수 기술 해금 · 다음 해금 ${unlockCost(owned())} 포인트</h4>
+        ${SKILLS.map((s, i) => {
+          const have = this.data.skills.includes(s.id), picked = unlocking.includes(s.id);
+          const right = have ? `<span class="tag">해금됨</span>`
+            : picked ? `<button class="pending" data-unlock="${s.id}">해금 취소</button>`
+            : `<button data-unlock="${s.id}" ${free >= unlockCost(owned()) ? "" : "disabled"}>해금 ${unlockCost(owned())}</button>`;
+          return `<div class="skill ${have ? "owned" : ""}">
+            <span class="num">${i + 1}</span>
+            <span><span class="name">${s.name}</span><br><span class="eff">${s.desc}</span></span>
+            ${right}
           </div>`;
         }).join("")}
         <div class="actions">
@@ -147,13 +193,25 @@ export const progression = {
         const k = b.closest(".stat").dataset.k, step = +b.dataset.d;
         pending[k] += step;
         free -= step;
+      } else if (b.dataset.unlock) {                          // pick or un-pick a skill to unlock
+        const id = b.dataset.unlock, at = unlocking.indexOf(id);
+        if (at < 0) {
+          free -= unlockCost(owned());
+          unlocking.push(id);
+        } else {
+          // refund everything picked from here on (prices depend on order), keep the earlier ones
+          for (let i = unlocking.length - 1; i >= at; i--) free += unlockCost(this.data.skills.length + i);
+          unlocking.splice(at);
+        }
       } else if (b.classList.contains("go")) {                // keep stats, spend points, next run
         for (const k in pending) this.data[k] += pending[k];
+        this.data.skills.push(...unlocking);
+        if (!this.data.equipped && this.data.skills.length) this.data.equipped = this.data.skills[0];
         this.data.points = free;
         save(this.data);
         location.reload();
         return;
-      } else if (b.classList.contains("wipe")) {              // two clicks: wipe stats and points
+      } else if (b.classList.contains("wipe")) {              // two clicks: wipe stats, skills and points
         if (!wipeArmed) { wipeArmed = true; }
         else {
           try { localStorage.removeItem(KEY); } catch { /* nothing saved anyway */ }

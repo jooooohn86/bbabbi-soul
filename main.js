@@ -9,6 +9,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 // [progression] growth system; every hook below checks it exists, so deleting this line and
 // progression.js removes it cleanly
 import { progression } from "./progression.js";
+import { SKILLS, SKILL_MIND_COST, SKILL_DAMAGE, SKILL_STAMINA } from "./skills.js";
 
 const canvas = document.getElementById("view");
 const dirLabel = document.getElementById("dir");
@@ -252,7 +253,9 @@ class SpriteCharacter {
 const keys = new Set();
 addEventListener("keydown", (e) => {
   keys.add(e.code);
-  if (e.code === "KeyF") setWire(!wire);
+  if (e.code === "KeyG") setWire(!wire);
+  if (e.code === "KeyF" && !e.repeat) bufferAction("skill");
+  if (/^Digit[1-9]$/.test(e.code)) selectSkill(+e.code.slice(5) - 1);
   if (e.code === "KeyP") { pixelIdx = (pixelIdx + 1) % PIXEL_SIZES.length; resize(); }
   if (e.code === "Space") { e.preventDefault(); if (!e.repeat) bufferAction("roll"); }
   if (e.code === "KeyJ" && !e.repeat) bufferAction("attack");
@@ -409,6 +412,7 @@ class Goblin {
     this.sprite.root.add(this.bar);
     scene.add(this.sprite.root);
     this.shake = 0;
+    this.knock = new THREE.Vector3();                     // knockback velocity, decays
     this.hide();
   }
 
@@ -425,6 +429,7 @@ class Goblin {
     this.stagger = 0;
     this.flash = 0;
     this.cooldown = 0;
+    this.knock.set(0, 0, 0);
     const s = this.sprite;
     s.root.visible = !!this.cfg.wander;
     s.root.position.copy(this.home);
@@ -446,7 +451,8 @@ class Goblin {
     this.cooldown = 0.6;
   }
 
-  takeHit(dmg, from) {
+  // knock: launch speed of a knockback (shockwave); big goblins move less
+  takeHit(dmg, from, knock = 0) {
     if (!this.alive) return;
     this.hp -= dmg;
     this.hits++;
@@ -454,6 +460,11 @@ class Goblin {
     const p = this.sprite.root.position;
     const away = p.clone().sub(from).setY(0).normalize();
     p.addScaledVector(away, this.kind === "large" ? 0.12 : 0.35);
+    if (knock) {
+      this.knock.copy(away).multiplyScalar(knock * (this.kind === "large" ? 0.4 : 1));
+      this.stagger = Math.max(this.stagger, 0.7);
+      this.sprite.oneShot = null;
+    }
     if (this.hits % this.cfg.poise === 0) {                 // poise broken: the attack is cancelled
       this.stagger = this.kind === "large" ? 0.6 : 0.45;
       this.sprite.oneShot = null;
@@ -534,6 +545,10 @@ class Goblin {
 
     this.flash -= dt;
     s.mat.color.setRGB(1, this.flash > 0 ? 0.45 : 1, this.flash > 0 ? 0.45 : 1);
+    if (this.knock.lengthSq() > 1e-4) {                     // thrown back by a shockwave
+      p.addScaledVector(this.knock, dt);
+      this.knock.multiplyScalar(Math.max(0, 1 - dt * 5));
+    }
     this.bar.userData.fill.scale.x = Math.max(0, this.hp / cfg.hp) * this.bar.userData.width;
 
     const to = heroPos.clone().sub(p).setY(0);
@@ -900,9 +915,11 @@ const COMBAT = {
   guardArc: 0.26, guardCost: 1.25,              // blocks hits within ~75 deg of facing; stamina per point of damage
   buffer: 0.3,                                  // an early press still fires this long afterwards
   damageTaken: 1,                               // multiplier on incoming damage (defence lowers it)
+  skillMind: SKILL_MIND_COST, mindRegen: 2.5,     // special skills: mind per use, mind regained per second
 };
 const H = {
   hp: 100, maxHp: 100, st: 100, maxSt: 100, regenWait: 0, stagger: 0, roll: null, dead: false,
+  mind: 100, maxMind: 100, skill: null,         // skill: the special skill being performed
   flash: 0, shake: 0, swingHit: false, lag: 100, lagWait: 0, buffered: null,
   knock: new THREE.Vector3(),                   // knockback velocity, decays
 };
@@ -910,6 +927,7 @@ if (typeof progression !== "undefined") progression.apply(COMBAT, H);   // [prog
 let hitStop = 0;
 const hpFill = document.getElementById("hpFill"), hpLag = document.getElementById("hpLag");
 const stFill = document.getElementById("stFill"), stBar = document.getElementById("stBar");
+const mpFill = document.getElementById("mpFill");
 const deathEl = document.getElementById("death");
 
 function bufferAction(a) { H.buffered = { a, t: COMBAT.buffer }; }
@@ -919,6 +937,8 @@ function damageHero(amount, from) {
   if (H.dead) return "ignored";
   amount *= COMBAT.damageTaken;
   if (H.roll && H.roll.t >= COMBAT.iFrom && H.roll.t <= COMBAT.iTo) return "dodged";
+  const act = H.skill && SKILL_ACTIONS[H.skill.id];
+  if (act?.iFrom !== undefined && H.skill.t >= act.iFrom && H.skill.t <= act.iTo) return "dodged";
   const p = hero.root.position;
   const toSrc = from.clone().sub(p).setY(0).normalize();
   const guarding = hero.state === "defend" && H.stagger <= 0;
@@ -940,6 +960,7 @@ function damageHero(amount, from) {
   H.shake = 0.25;
   hero.oneShot = null;
   H.roll = null;
+  H.skill = null;                               // a hit cuts a special skill short
   H.stagger = Math.max(H.stagger, 0.35);
   H.knock.copy(toSrc).multiplyScalar(-4);
   if (H.hp <= 0) killHero();
@@ -964,6 +985,145 @@ function updateHud(dt) {
   hpLag.style.width = `${(H.lag / H.maxHp) * 100}%`;
   stFill.style.width = `${(Math.max(0, H.st) / H.maxSt) * 100}%`;
   stBar.classList.toggle("empty", H.st <= 0);
+  mpFill.style.width = `${(H.mind / H.maxMind) * 100}%`;
+  skillBar.classList.toggle("nomind", H.mind < COMBAT.skillMind);
+}
+
+// ---------- special skills (see skills.js): F uses the equipped one, number keys pick it ----------
+// Each entry: anim (hero motion played once), speed (its playback rate), time (how long the skill
+// owns the hero), optional iFrom..iTo (invincible window), start(sk) and tick(sk, dt, heroPos).
+const SKILL_ACTIONS = {
+  // spin: the facing turns a full circle while the sword is held out; hits everything around
+  spin: {
+    anim: "spin", time: 0.45,
+    start(sk) { sk.yaw0 = hero.facing; },
+    tick(sk, dt, p) {
+      hero.facing = sk.yaw0 + Math.min(1, sk.t / 0.42) * Math.PI * 2;
+      if (!sk.struck && sk.t >= 0.12) { sk.struck = true; spinFx(p); hitAround(p, 2.0, 0); }
+    },
+  },
+  // pierce: a dash straight ahead, invincible, running every enemy on the way through
+  pierce: {
+    anim: "thrust", time: 0.42, iFrom: 0.04, iTo: 0.32,
+    start(sk) { sk.dir = facingVec(hero.facing); },
+    tick(sk, dt, p) {
+      if (sk.t < 0.06 || sk.t > 0.3) return;
+      if (!sk.fx) { sk.fx = true; pierceFx(p, sk.dir); }
+      p.addScaledVector(sk.dir, 15 * dt);
+      let hit = false;
+      for (const g of enemies) {
+        if (!g.alive || sk.hits.has(g)) continue;
+        const q = g.sprite.root.position;
+        if (Math.hypot(q.x - p.x, q.z - p.z) < 1.1 + g.cfg.radius) { sk.hits.add(g); skillHit(g, p, 0); hit = true; }
+      }
+      if (hit) hitStop = 0.05;
+    },
+  },
+  // shock: the overhead chop slams the ground; a ring throws everything nearby back
+  shock: {
+    anim: "attack", speed: 1.15, time: 0.5,
+    tick(sk, dt, p) {
+      if (!sk.struck && sk.t >= 0.24) { sk.struck = true; shockFx(p); hitAround(p, 4.5, 14); H.shake = 0.2; }
+    },
+  },
+};
+
+function skillHit(g, from, knock) {
+  g.takeHit(COMBAT.heroDmg * SKILL_DAMAGE, from, knock);
+}
+function hitAround(p, range, knock) {
+  let hit = false;
+  for (const g of enemies) {
+    if (!g.alive) continue;
+    const q = g.sprite.root.position;
+    if (Math.hypot(q.x - p.x, q.z - p.z) < range + g.cfg.radius) { skillHit(g, p, knock); hit = true; }
+  }
+  if (hit) hitStop = 0.07;
+}
+
+function equippedSkill() {
+  return typeof progression !== "undefined" ? progression.equipped() : null;
+}
+function startSkill() {
+  const id = equippedSkill();
+  if (!id) return flashSkillBar("해금한 특수기가 없습니다 (사망 후 포인트로 해금)");
+  if (H.mind < COMBAT.skillMind) return flashSkillBar("정신력이 부족합니다");
+  const act = SKILL_ACTIONS[id];
+  H.mind -= COMBAT.skillMind;
+  H.st -= COMBAT.attackCost * SKILL_STAMINA;
+  H.skill = { id, t: 0, hits: new Set() };
+  act.start?.(H.skill);
+  hero.playOnce(act.anim, act.speed ?? 1);
+}
+function updateSkill(dt, p) {
+  const sk = H.skill, act = SKILL_ACTIONS[sk.id];
+  sk.t += dt;
+  act.tick(sk, dt, p);
+  if (sk.t >= act.time) H.skill = null;
+}
+
+const skillBar = document.getElementById("skillbar");
+let hintTimer = 0;
+function renderSkillBar() {
+  const own = typeof progression !== "undefined" ? progression.unlocked() : [];
+  const eq = equippedSkill();
+  skillBar.innerHTML = SKILLS.map((sk, i) => {
+    const has = own.includes(sk.id);
+    return `<div class="slot ${has ? "" : "locked"} ${sk.id === eq ? "on" : ""}">
+      <b>${i + 1}</b><span>${sk.name}</span><small>${has ? `정신력 ${COMBAT.skillMind}` : "잠김"}</small></div>`;
+  }).join("") + `<div class="hint" id="skillHint">F 특수기 사용</div>`;
+}
+function flashSkillBar(text) {
+  const hint = document.getElementById("skillHint");
+  hint.textContent = text;
+  skillBar.classList.add("warn");
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { skillBar.classList.remove("warn"); hint.textContent = "F 특수기 사용"; }, 1600);
+}
+function selectSkill(i) {
+  const sk = SKILLS[i];
+  if (!sk) return;
+  if (typeof progression !== "undefined" && progression.equip(sk.id)) renderSkillBar();
+  else flashSkillBar(`${sk.name}: 아직 잠겨 있습니다`);
+}
+renderSkillBar();
+
+// ---------- skill effects: short additive flashes that the bloom picks up ----------
+const effects = [];
+function fxMaterial(color) {
+  return new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthWrite: false,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+}
+function addEffect(mesh, dur, tick) {
+  scene.add(mesh);
+  effects.push({ mesh, dur, t: 0, tick });
+}
+function updateEffects(dt) {
+  for (let i = effects.length - 1; i >= 0; i--) {
+    const e = effects[i];
+    e.t += dt;
+    const k = Math.min(1, e.t / e.dur);
+    e.tick(e.mesh, k);
+    if (k >= 1) { scene.remove(e.mesh); e.mesh.geometry.dispose(); e.mesh.material.dispose(); effects.splice(i, 1); }
+  }
+}
+function spinFx(p) {                     // a sweeping arc around the hero at sword height
+  const m = new THREE.Mesh(new THREE.RingGeometry(1.75, 2.25, 48, 1, 0, Math.PI * 1.7), fxMaterial("#cfe6ff"));
+  m.rotation.x = -Math.PI / 2;
+  m.position.copy(p).add(new THREE.Vector3(0, 0.9, 0));
+  addEffect(m, 0.35, (o, k) => { o.rotation.z = hero.facing + k * 2; o.material.opacity = 0.75 * (1 - k); });
+}
+function pierceFx(p, dir) {              // a streak along the dash
+  const m = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, 4.2), fxMaterial("#d8ecff"));
+  m.position.copy(p).addScaledVector(dir, 2.1).add(new THREE.Vector3(0, 1.0, 0));
+  m.rotation.y = Math.atan2(dir.x, dir.z);
+  addEffect(m, 0.35, (o, k) => { o.material.opacity = 0.9 * (1 - k); o.scale.x = 1 + k * 2; });
+}
+function shockFx(p) {                    // a ring racing out over the ground
+  const m = new THREE.Mesh(new THREE.RingGeometry(0.82, 1.0, 64), fxMaterial("#e2f4ff"));
+  m.rotation.x = -Math.PI / 2;
+  m.position.copy(p).add(new THREE.Vector3(0, 0.12, 0));
+  addEffect(m, 0.4, (o, k) => { o.scale.setScalar(0.5 + k * 4.6); o.material.opacity = 0.95 * (1 - k); });
 }
 
 // ---------- main ----------
@@ -997,7 +1157,9 @@ function step(dt) {
       const a = H.buffered.a;
       H.buffered = null;
       if (move.lengthSq() > 0) hero.facing = Math.atan2(move.x, move.z);
-      if (a === "attack") {
+      if (a === "skill") {
+        startSkill();
+      } else if (a === "attack") {
         H.st -= COMBAT.attackCost;
         hero.playOnce("attack");
         H.swingHit = false;
@@ -1050,6 +1212,9 @@ function step(dt) {
     if (H.regenWait <= 0) H.st = Math.min(H.maxSt, H.st + COMBAT.regen * dt * (defending ? COMBAT.guardRegen : 1));
   }
 
+  if (H.skill) updateSkill(dt, p);
+  if (!H.dead) H.mind = Math.min(H.maxMind, H.mind + COMBAT.mindRegen * dt);
+
   // the sword lands on its hit frame: every goblin in reach and in front takes it
   if (hero.oneShot?.name === "attack" && hero.frame >= COMBAT.heroHitFrame && !H.swingHit) {
     H.swingHit = true;
@@ -1098,6 +1263,7 @@ function step(dt) {
   fadeOccluders(look);
   updateBirds(dt, p);
   updateAtmosphere(dt, p);
+  updateEffects(dt);
   updateEnemies(dt, p);
   for (const g of enemies) if (g.sprite.root.visible) g.sprite.update(dt, camera);
   if (dog) { dog.update(dt, p, hero.facing); dog.sprite.update(dt, camera); }

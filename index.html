@@ -71,15 +71,15 @@
 </div>
 <div id="hud">
   <b>WASD</b> 이동 · <b>Shift</b> 달리기 · <b>Space</b> 구르기<br>
-  <b>우클릭</b> 공격 · <b>좌클릭</b> 누르고 있기: 방어 (키보드 <b>J</b> · <b>K</b>)<br>
-  <b>마우스 이동</b> 카메라 회전 · <b>Esc</b> 커서 풀기 · <b>휠</b> 줌<br>
-  <b>Q / E</b> 카메라 회전 · <b>P</b> 픽셀 크기 전환 · <b>F</b> 와이어프레임
+  <b>좌클릭</b> 공격 · <b>우클릭</b> 누르고 있기: 방어 (키보드 <b>J</b> · <b>K</b>)<br>
+  <b>마우스를 화면 좌우 끝으로</b> 카메라 회전 · <b>휠 버튼 드래그</b> · <b>Q / E</b><br>
+  <b>휠</b> 줌 · <b>P</b> 픽셀 크기 전환 · <b>F</b> 와이어프레임
 </div>
 <div id="dir"></div>
 <button id="wireBtn" type="button">와이어프레임 보기</button>
 <div id="death"><div class="msg"><h1>YOU DIED</h1><p>클릭하면 처음부터 다시 시작합니다</p></div></div>
 <div id="cover"><div><h2>Bbabbi Soul</h2><p>화면을 클릭하거나 아무 키나 누르면 시작합니다</p>
-<p class="keys">WASD 이동 · 우클릭 공격 · 좌클릭(누르고 있기) 방어 · Space 구르기 · 마우스로 카메라</p></div></div>
+<p class="keys">WASD 이동 · 좌클릭 공격 · 우클릭(누르고 있기) 방어 · Space 구르기 · 마우스를 화면 좌우 끝으로: 카메라 회전</p></div></div>
 <script>
   const cover = document.getElementById("cover");
   const start = () => { cover.hidden = true; window.focus(); };

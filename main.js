@@ -249,32 +249,34 @@ addEventListener("keyup", (e) => keys.delete(e.code));
 
 const cam = { yaw: Math.PI * 0.25, pitch: 0.72, dist: 13 };
 let dragging = false, lastX = 0, lastY = 0;
-// mouse: moving it turns the camera (pointer lock, taken on the first click), the right button
-// attacks, holding the left button guards. Esc frees the cursor; without the lock (Esc, or a
-// page frame that refuses it) the middle button drags the camera instead.
+// mouse (the pointer stays visible): left button attacks, holding the right button guards.
+// Resting the pointer near the left or right edge of the screen turns the camera that way
+// (faster the closer it is); the middle button drags the camera; Q / E still turn it.
 let mouseGuard = false;
-const locked = () => document.pointerLockElement === canvas;
+const pointer = { x: 0, inside: false };
+const EDGE = 0.1, EDGE_SPEED = 2.2;        // edge band as a share of the width, max turn (rad/s)
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });   // no autoscroll
 canvas.addEventListener("pointerdown", (e) => {
-  if (!locked() && !H.dead) {
-    try { canvas.requestPointerLock()?.catch?.(() => {}); } catch { /* not allowed here: drag instead */ }
-  }
-  if (e.button === 0) mouseGuard = true;
-  else if (e.button === 2) bufferAction("attack");
+  if (e.button === 0) bufferAction("attack");
+  else if (e.button === 2) mouseGuard = true;
   else if (e.button === 1) { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); }
 });
 addEventListener("pointerup", (e) => {
-  if (e.button === 0) mouseGuard = false;
+  if (e.button === 2) mouseGuard = false;
   if (e.button === 1) dragging = false;
 });
-addEventListener("blur", () => { mouseGuard = false; dragging = false; keys.clear(); });
+addEventListener("blur", () => { mouseGuard = false; dragging = false; pointer.inside = false; keys.clear(); });
+document.addEventListener("mouseleave", () => (pointer.inside = false));
+function edgeTurn(dt) {
+  if (!pointer.inside || dragging) return;
+  const band = innerWidth * EDGE;
+  if (pointer.x < band) cam.yaw += EDGE_SPEED * (1 - pointer.x / band) * dt;
+  else if (pointer.x > innerWidth - band) cam.yaw -= EDGE_SPEED * (1 - (innerWidth - pointer.x) / band) * dt;
+}
 document.addEventListener("mousemove", (e) => {
-  if (locked()) {
-    cam.yaw -= e.movementX * 0.0025;
-    cam.pitch = THREE.MathUtils.clamp(cam.pitch + e.movementY * 0.002, 0.2, 1.25);
-    return;
-  }
+  pointer.x = e.clientX;
+  pointer.inside = e.target === canvas;     // not while over a button or the death screen
   if (!dragging) return;
   cam.yaw -= (e.clientX - lastX) * 0.008;
   cam.pitch = THREE.MathUtils.clamp(cam.pitch + (e.clientY - lastY) * 0.005, 0.2, 1.25);
@@ -810,7 +812,6 @@ function killHero() {
   hero.state = "die";
   deathEl.classList.add("show");                // darkens over 2 s (CSS), then YOU DIED fades in
   mouseGuard = false;
-  if (locked()) document.exitPointerLock();     // the cursor is needed for the buttons on the death screen
   if (typeof progression !== "undefined") progression.onDeath(deathEl);   // [progression] spend screen
   else setTimeout(() => deathEl.addEventListener("click", () => location.reload(), { once: true }), 2000);
 }
@@ -832,6 +833,7 @@ function step(dt) {
   if (hitStop > 0) { hitStop -= dt; dt *= 0.05; }       // brief freeze when the sword connects
   if (keys.has("KeyQ")) cam.yaw += dt * 1.8;
   if (keys.has("KeyE")) cam.yaw -= dt * 1.8;
+  edgeTurn(dt);
 
   // movement input relative to the camera's ground-plane forward
   const fwd = new THREE.Vector3(-Math.sin(cam.yaw), 0, -Math.cos(cam.yaw));

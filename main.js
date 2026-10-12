@@ -249,11 +249,43 @@ class SpriteCharacter {
   }
 }
 
+// ---------- timing ----------
+// The game runs on a fixed 120 Hz step, apart from the screen's frame rate, and simNow is the
+// moment (ms, performance.now() base, same as event.timeStamp) the current step stands for.
+// Inputs keep their own timestamps, so a parry is judged against when the blow really lands.
+const FIXED = 1 / 120;
+let simNow = performance.now();
+
+// ---------- sound: tiny synthesized cues (a glint ping before a blow, a clang on a parry) ----------
+let actx = null;
+function audio() {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch { actx = false; } }
+  return actx || null;
+}
+addEventListener("pointerdown", () => audio()?.resume(), { once: true, capture: true });   // audio needs a gesture
+addEventListener("keydown", () => audio()?.resume(), { once: true, capture: true });
+function tone(freq, dur, gain, type = "sine", glideTo = null) {
+  const a = audio();
+  if (!a || a.state !== "running") return;
+  const o = a.createOscillator(), g = a.createGain(), t = a.currentTime;
+  o.type = type;
+  o.frequency.setValueAtTime(freq, t);
+  if (glideTo) o.frequency.exponentialRampToValueAtTime(glideTo, t + dur);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(a.destination);
+  o.start(t);
+  o.stop(t + dur);
+}
+function glintSound() { tone(2600, 0.09, 0.035); }
+function clangSound() { tone(1350, 0.35, 0.12, "triangle", 900); tone(2400, 0.25, 0.06, "square", 1900); tone(180, 0.12, 0.1, "sawtooth", 90); }
+
 // ---------- input ----------
 const keys = new Set();
 addEventListener("keydown", (e) => {
   keys.add(e.code);
   if (e.code === "KeyG") setWire(!wire);
+  if (e.code === "KeyK" && !e.repeat) H.guardPressAt = e.timeStamp;
   if (e.code === "KeyF" && !e.repeat) bufferAction("skill");
   if (/^Digit[1-9]$/.test(e.code)) selectSkill(+e.code.slice(5) - 1);
   if (e.code === "KeyP") { pixelIdx = (pixelIdx + 1) % PIXEL_SIZES.length; resize(); }
@@ -274,7 +306,7 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });   // no autoscroll
 canvas.addEventListener("pointerdown", (e) => {
   if (e.button === 0) bufferAction("attack");
-  else if (e.button === 2) mouseGuard = true;
+  else if (e.button === 2) { mouseGuard = true; H.guardPressAt = e.timeStamp; }
   else if (e.button === 1) { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); }
 });
 addEventListener("pointerup", (e) => {
@@ -320,16 +352,16 @@ const GOBLINS = {
   // hitFrame: attack frame where the blow lands      atkSpeed: attack playback rate (lower = longer wind-up)
   // poise: hits it takes before it staggers      barY: height of its health bar
   small: { detect: 7, speed: 4.4, radius: 0.25, blob: 0.22, bush: 0.8, reach: 0.45, cooldown: 1.1,
-           hp: 120, dmg: 10, hitFrame: 3, atkSpeed: 0.9, poise: 1, barY: 1.25, barW: 0.6 },
+           hp: 120, dmg: 10, hitFrame: 3, atkSpeed: 0.6, poise: 1, barY: 1.25, barW: 0.6 },
   mid:   { detect: 12, speed: 3.2, radius: 0.35, blob: 0.38, bush: 1.1, reach: 0.6, cooldown: 2.4, meleeCooldown: 1.6,
            keepFar: 11, meleeSwitch: 3.5, releaseFrame: 4, arrowDmg: 12,
-           hp: 180, dmg: 12, hitFrame: 3, atkSpeed: 0.75, poise: 1, barY: 2.0, barW: 0.8 },
+           hp: 180, dmg: 12, hitFrame: 3, atkSpeed: 0.6, poise: 1, barY: 2.0, barW: 0.8 },
   large: { detect: 8, speed: 2.4, radius: 0.60, blob: 0.62, bush: 1.6, reach: 0.9, cooldown: 2.4,
-           hp: 450, dmg: 30, hitFrame: 3, atkSpeed: 0.55, poise: 2, barY: 3.15, barW: 1.2 },
+           hp: 450, dmg: 30, hitFrame: 3, atkSpeed: 0.45, poise: 2, barY: 3.15, barW: 1.2 },
   // zombies: no bush; they wander the infected zone in numbers, slow but many.
   // giveUp: hero this far away and they lose interest and wander where they are
   zombie: { detect: 9, speed: 1.9, radius: 0.32, blob: 0.36, bush: 0, reach: 0.5, cooldown: 1.5,
-            hp: 100, dmg: 9, hitFrame: 3, atkSpeed: 0.8, poise: 1, barY: 2.0, barW: 0.8,
+            hp: 100, dmg: 9, hitFrame: 3, atkSpeed: 0.6, poise: 1, barY: 2.0, barW: 0.8,
             wander: true, wanderSpeed: 0.6, giveUp: 20, animRate: 0.55 },
 };
 for (const k of ["small", "mid", "large"]) GOBLINS[k].atlas = `goblin_${k}`;
@@ -418,6 +450,13 @@ class Goblin {
 
   get alive() { return this.state === "hunt"; }
 
+  // knocked off balance by a parry: a long stagger, and the next hit on it is a critical
+  parried() {
+    this.stagger = PARRY.stagger;
+    this.sprite.oneShot = null;
+    this.riposteUntil = simNow + PARRY.stagger * 1000;
+  }
+
   // back in the bush (zombies: back at their spot, wandering) at full health; also the respawn
   hide() {
     this.state = this.cfg.wander ? "wander" : "hidden";
@@ -430,6 +469,7 @@ class Goblin {
     this.flash = 0;
     this.cooldown = 0;
     this.knock.set(0, 0, 0);
+    this.riposteUntil = 0;
     const s = this.sprite;
     s.root.visible = !!this.cfg.wander;
     s.root.position.copy(this.home);
@@ -544,7 +584,9 @@ class Goblin {
     }
 
     this.flash -= dt;
-    s.mat.color.setRGB(1, this.flash > 0 ? 0.45 : 1, this.flash > 0 ? 0.45 : 1);
+    if (this.flash > 0) s.mat.color.setRGB(1, 0.45, 0.45);
+    else if (this.riposteUntil > simNow) s.mat.color.setRGB(0.7, 0.82, 1);   // open to a riposte
+    else s.mat.color.setRGB(1, 1, 1);
     if (this.knock.lengthSq() > 1e-4) {                     // thrown back by a shockwave
       p.addScaledVector(this.knock, dt);
       this.knock.multiplyScalar(Math.max(0, 1 - dt * 5));
@@ -583,6 +625,10 @@ class Goblin {
             s.playOnce("attack", cfg.atkSpeed);
             this.cooldown = this.kind === "mid" ? cfg.meleeCooldown : cfg.cooldown;
             this.struck = false;
+            // the blow lands hitFrame frames in; the weapon glints GLINT_LEAD before that
+            const fps = s.atlas.anims.dir0_attack.fps * cfg.atkSpeed;
+            this.glintAt = cfg.hitFrame / fps - GLINT_LEAD;
+            this.glinted = false;
           }
         } else if (dist > cfg.keepFar) {
           move = 1;
@@ -592,10 +638,17 @@ class Goblin {
           this.loosed = false;
         }
       }
+      // oneShot.t runs at the playback rate; divide it back out to compare in real seconds
+      if (s.oneShot?.name === "attack" && !this.glinted && s.oneShot.t / cfg.atkSpeed >= this.glintAt) {
+        this.glinted = true;
+        glintFx(this);
+      }
       // melee blow lands on its hit frame: hero in reach and in front of the goblin
       if (s.oneShot?.name === "attack" && s.frame >= cfg.hitFrame && !this.struck) {
         this.struck = true;
-        if (dist <= bodies + 0.35 && facingVec(s.facing).dot(to) > 0.35) damageHero(cfg.dmg, p);
+        if (dist <= bodies + 0.35 && facingVec(s.facing).dot(to) > 0.35) {
+          if (damageHero(cfg.dmg, p) === "parried") this.parried();
+        }
       }
       // the archer lets go on the release frame of its draw
       if (s.oneShot?.name === "shoot" && s.frame >= cfg.releaseFrame && !this.loosed) {
@@ -654,6 +707,7 @@ function updateArrows(dt) {
       if (!a.passed && Math.hypot(q.x - hp.x, q.z - hp.z) < 0.45 && q.y > hp.y + 0.1 && q.y < hp.y + 1.7) {
         const r = damageHero(a.dmg, a.from);
         if (r === "dodged") a.passed = true;               // rolled through it: it flies on
+        else if (r === "parried") sparkFx(q);              // knocked out of the air
         else { scene.remove(a.m); arrows.splice(i, 1); continue; }
       }
       const gy = groundY(q.x, q.z);
@@ -917,9 +971,18 @@ const COMBAT = {
   damageTaken: 1,                               // multiplier on incoming damage (defence lowers it)
   skillMind: SKILL_MIND_COST, mindRegen: 2.5,     // special skills: mind per use, mind regained per second
 };
+// parry: the guard (right button / K) newly raised within `window` ms before a blow lands from the front
+const PARRY = {
+  window: 150,          // ms: the parry timing window
+  stagger: 1.4,         // s the attacker reels (and stays open to a riposte)
+  riposte: 2.5,         // damage multiplier of the first hit on a parried enemy
+  mind: 5,              // mind regained by a parry
+};
+const GLINT_LEAD = 0.28;   // s before a blow lands that the attacker's weapon glints
 const H = {
   hp: 100, maxHp: 100, st: 100, maxSt: 100, regenWait: 0, stagger: 0, roll: null, dead: false,
   mind: 100, maxMind: 100, skill: null,         // skill: the special skill being performed
+  guardPressAt: -1e9,                           // ms timestamp the guard was last raised (for parries)
   flash: 0, shake: 0, swingHit: false, lag: 100, lagWait: 0, buffered: null,
   knock: new THREE.Vector3(),                   // knockback velocity, decays
 };
@@ -932,7 +995,7 @@ const deathEl = document.getElementById("death");
 
 function bufferAction(a) { H.buffered = { a, t: COMBAT.buffer }; }
 
-// returns "dodged" | "blocked" | "hit" | "ignored"
+// returns "dodged" | "parried" | "blocked" | "hit" | "ignored"
 function damageHero(amount, from) {
   if (H.dead) return "ignored";
   amount *= COMBAT.damageTaken;
@@ -942,6 +1005,18 @@ function damageHero(amount, from) {
   const p = hero.root.position;
   const toSrc = from.clone().sub(p).setY(0).normalize();
   const guarding = hero.state === "defend" && H.stagger <= 0;
+  // parry: a fresh guard press inside the window before this blow (only against the front)
+  const sincePress = simNow - H.guardPressAt;
+  const free = !H.roll && !hero.attacking && H.stagger <= 0;
+  if (free && sincePress >= 0 && sincePress <= PARRY.window && facingVec(hero.facing).dot(toSrc) > COMBAT.guardArc) {
+    H.guardPressAt = -1e9;                      // one press parries one blow
+    H.mind = Math.min(H.maxMind, H.mind + PARRY.mind);
+    hitStop = 0.12;
+    H.shake = 0.12;
+    clangSound();
+    sparkFx(p.clone().addScaledVector(toSrc, 0.5).add(new THREE.Vector3(0, 1.1, 0)));
+    return "parried";
+  }
   if (guarding && facingVec(hero.facing).dot(toSrc) > COMBAT.guardArc) {
     const cost = amount * COMBAT.guardCost;
     if (H.st >= cost) {                         // blocked: stamina takes it
@@ -1028,8 +1103,17 @@ const SKILL_ACTIONS = {
   },
 };
 
+// x2.5 on the first hit into a parried enemy (and that uses up the opening)
+function riposte(g) {
+  if (!(g.riposteUntil > simNow)) return 1;
+  g.riposteUntil = 0;
+  g.stagger = 0;
+  critFx(g.sprite.root.position);
+  return PARRY.riposte;
+}
+
 function skillHit(g, from, knock) {
-  g.takeHit(COMBAT.heroDmg * SKILL_DAMAGE, from, knock);
+  g.takeHit(COMBAT.heroDmg * SKILL_DAMAGE * riposte(g), from, knock);
 }
 function hitAround(p, range, knock) {
   let hit = false;
@@ -1118,6 +1202,58 @@ function pierceFx(p, dir) {              // a streak along the dash
   m.position.copy(p).addScaledVector(dir, 2.1).add(new THREE.Vector3(0, 1.0, 0));
   m.rotation.y = Math.atan2(dir.x, dir.z);
   addEffect(m, 0.35, (o, k) => { o.material.opacity = 0.9 * (1 - k); o.scale.x = 1 + k * 2; });
+}
+function starMesh(size, color) {          // a 4-point twinkle, faced to the camera by its tick
+  const g = new THREE.Group();
+  for (const r of [0, Math.PI / 2]) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size * 0.14), fxMaterial(color));
+    m.rotation.z = r;
+    g.add(m);
+  }
+  // updateEffects fades mesh.material.opacity and disposes mesh.geometry/material: pass both to the arms
+  g.geometry = { dispose() { g.children.forEach((c) => c.geometry.dispose()); } };
+  g.material = {
+    set opacity(v) { g.children.forEach((c) => (c.material.opacity = v)); },
+    dispose() { g.children.forEach((c) => c.material.dispose()); },
+  };
+  return g;
+}
+function glintFx(enemy) {                 // the attacker's weapon flashes just before the blow
+  const p = enemy.sprite.root.position;
+  const m = starMesh(0.9, "#fff6c8");
+  const f = facingVec(enemy.sprite.facing);
+  m.position.copy(p).addScaledVector(f, 0.45).add(new THREE.Vector3(0, enemy.cfg.barY * 0.75, 0));
+  addEffect(m, 0.22, (o, k) => {
+    o.quaternion.copy(camera.quaternion);
+    o.rotateZ(k * 1.5);
+    o.scale.setScalar(0.4 + Math.sin(k * Math.PI) * 1.1);
+    o.material.opacity = 1 - k * 0.6;
+  });
+  if (enemy.sprite.root.position.distanceTo(hero.root.position) < 10) glintSound();
+}
+function sparkFx(at) {                    // a parry: a burst of light at the shield
+  const m = starMesh(1.8, "#ffffff");
+  m.position.copy(at);
+  addEffect(m, 0.25, (o, k) => {
+    o.quaternion.copy(camera.quaternion);
+    o.rotateZ(0.6 + k);
+    o.scale.setScalar(0.6 + k * 1.4);
+    o.material.opacity = 1 - k;
+  });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.42, 32), fxMaterial("#fff2b0"));
+  ring.position.copy(at);
+  addEffect(ring, 0.3, (o, k) => { o.quaternion.copy(camera.quaternion); o.scale.setScalar(1 + k * 3); o.material.opacity = 0.9 * (1 - k); });
+}
+function critFx(p) {                      // a riposte lands
+  const m = starMesh(2.4, "#ffd479");
+  m.position.copy(p).add(new THREE.Vector3(0, 1.2, 0));
+  addEffect(m, 0.3, (o, k) => {
+    o.quaternion.copy(camera.quaternion);
+    o.rotateZ(k * 2);
+    o.scale.setScalar(0.5 + k * 1.2);
+    o.material.opacity = 1 - k;
+  });
+  tone(520, 0.18, 0.08, "square", 260);
 }
 function shockFx(p) {                    // a ring racing out over the ground
   const m = new THREE.Mesh(new THREE.RingGeometry(0.82, 1.0, 64), fxMaterial("#e2f4ff"));
@@ -1225,7 +1361,7 @@ function step(dt) {
       const to = g.sprite.root.position.clone().sub(p).setY(0);
       const d = to.length();
       if (d < COMBAT.heroReach + g.cfg.radius + HERO_RADIUS && f.dot(to.normalize()) > 0.4) {
-        g.takeHit(COMBAT.heroDmg, p);
+        g.takeHit(COMBAT.heroDmg * riposte(g), p);
         hits++;
       }
     }
@@ -1287,9 +1423,19 @@ async function main() {
   dog = new Dog(dogAtlas, await new THREE.TextureLoader().loadAsync(`assets/${dogAtlas.image}`));
   dog.place(hero.root.position);
 
-  const clock = new THREE.Clock();
+  let last = performance.now(), acc = 0;
   renderer.setAnimationLoop(() => {
-    step(Math.min(clock.getDelta(), 0.05));
+    const now = performance.now();
+    acc += Math.min(0.25, (now - last) / 1000);   // after a long stall, don't try to catch up
+    last = now;
+    let n = 0;
+    while (acc >= FIXED && n < 15) {
+      acc -= FIXED;
+      simNow = now - acc * 1000;                      // the moment this step stands for
+      step(FIXED);
+      n++;
+    }
+    if (n === 15) acc = 0;
     composer.render();
   });
 }

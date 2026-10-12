@@ -13,6 +13,7 @@ zone: dead trees, toxic pools, glowing crystals and a crowd of zombies.
 | WASD | Move |
 | Left click / J | Attack |
 | Right click (hold) / K | Shield guard |
+| Right click / K just before a blow lands | Parry (150 ms window): the attacker reels and your next hit is a critical |
 | Pointer at the left / right screen edge | Turn the camera (also middle-button drag, or Q / E) |
 | Space | Roll (invincible mid-roll) |
 | F | Special skill (uses mind) |

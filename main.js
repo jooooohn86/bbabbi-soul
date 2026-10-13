@@ -450,7 +450,7 @@ class Goblin {
 
   get alive() { return this.state === "hunt"; }
 
-  // knocked off balance by a parry: a long stagger, and the next hit on it is a critical
+  // knocked off balance by a parry: groggy (frozen, flashing red), and the next hit on it is a critical
   parried() {
     this.stagger = PARRY.stagger;
     this.sprite.oneShot = null;
@@ -585,8 +585,11 @@ class Goblin {
 
     this.flash -= dt;
     if (this.flash > 0) s.mat.color.setRGB(1, 0.45, 0.45);
-    else if (this.riposteUntil > simNow) s.mat.color.setRGB(0.7, 0.82, 1);   // open to a riposte
-    else s.mat.color.setRGB(1, 1, 1);
+    else if (this.riposteUntil > simNow) {                  // groggy after a parry: pulsing red, ~6 blinks a second
+      const k = 0.5 + 0.5 * Math.sin(simNow * 0.04);
+      s.mat.color.setRGB(1, 0.25 + 0.55 * k, 0.25 + 0.55 * k);
+    } else s.mat.color.setRGB(1, 1, 1);
+    if (this.riposteUntil > simNow) this.knock.set(0, 0, 0);   // groggy: rooted to the spot
     if (this.knock.lengthSq() > 1e-4) {                     // thrown back by a shockwave
       p.addScaledVector(this.knock, dt);
       this.knock.multiplyScalar(Math.max(0, 1 - dt * 5));
@@ -974,7 +977,7 @@ const COMBAT = {
 // parry: the guard (right button / K) newly raised within `window` ms before a blow lands from the front
 const PARRY = {
   window: 150,          // ms: the parry timing window
-  stagger: 1.4,         // s the attacker reels (and stays open to a riposte)
+  stagger: 1.0,         // s the attacker is groggy: frozen, flashing red, open to a riposte
   riposte: 2.5,         // damage multiplier of the first hit on a parried enemy
   mind: 5,              // mind regained by a parry
 };

@@ -402,7 +402,7 @@ const GOBLINS = {
            keepFar: 11, meleeSwitch: 3.5, releaseFrame: 4, arrowDmg: 12,
            hp: 180, dmg: 12, hitFrame: 3, atkSpeed: 0.6, poise: 1, barY: 2.0, barW: 0.8 },
   large: { detect: 8, speed: 2.4, radius: 0.60, blob: 0.62, bush: 1.6, reach: 0.9, cooldown: 2.4,
-           hp: 450, dmg: 30, hitFrame: 3, atkSpeed: 0.45, poise: 2, barY: 3.15, barW: 1.2 },
+           hp: 450, dmg: 30, hitFrame: 4, atkSpeed: 0.45, poise: 2, barY: 3.15, barW: 1.2 },  // frame 4 = club hits the ground
   // zombies: no bush; they wander the infected zone in numbers, slow but many.
   // giveUp: hero this far away and they lose interest and wander where they are
   zombie: { detect: 9, speed: 1.9, radius: 0.32, blob: 0.36, bush: 0, reach: 0.5, cooldown: 1.5,

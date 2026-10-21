@@ -237,7 +237,11 @@ class SpriteCharacter {
   // play a motion once over whatever state is set, then hand back to it.
   // speed scales its frame rate (goblin wind-ups are slowed down so they can be read)
   playOnce(name, speed = 1) {
-    if (!this.oneShot) this.oneShot = { name, t: 0, speed };
+    if (this.oneShot) return;
+    this.oneShot = { name, t: 0, speed };
+    // `frame` is only recomputed in update(); until then it still holds the previous loop's frame,
+    // and hit checks (frame >= hitFrame) in the same step would land the blow before the wind-up
+    this.frame = 0;
   }
 
   update(dt, cam) {

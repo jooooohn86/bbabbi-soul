@@ -1032,6 +1032,13 @@ const PARRY = {
   mind: 5,              // mind regained by a parry
 };
 const GLINT_LEAD = 0.28;   // s before a blow lands that the attacker's weapon glints
+// 검기 파동 (skill 3): hits a fan ahead of the hero; the Effekseer slash is placed to cover the same fan
+const SHOCK_FAN = {
+  range: 5.5,                       // m
+  halfAngle: THREE.MathUtils.degToRad(60),
+  fxForward: 1.2,                   // m from the hero to the slash's centre
+  fxScale: 0.6,                     // slash outer edge = 7 x 0.6 = 4.2 m from its centre → 5.4 m ahead
+};
 const H = {
   hp: 100, maxHp: 100, st: 100, maxSt: 100, regenWait: 0, stagger: 0, roll: null, dead: false,
   mind: 100, maxMind: 100, skill: null,         // skill: the special skill being performed
@@ -1147,11 +1154,17 @@ const SKILL_ACTIONS = {
       if (hit) hitStop = 0.05;
     },
   },
-  // shock: the overhead chop slams the ground; a ring throws everything nearby back
+  // shock (검기 파동): the overhead chop slams the ground and sends a sword wave out in a fan ahead;
+  // only enemies inside that fan are cut and thrown back
   shock: {
     anim: "attack", speed: 1.15, time: 0.5,
     tick(sk, dt, p) {
-      if (!sk.struck && sk.t >= 0.24) { sk.struck = true; shockFx(p); hitAround(p, 4.5, 14); H.shake = 0.2; }
+      if (!sk.struck && sk.t >= 0.24) {
+        sk.struck = true;
+        shockFx(p);
+        hitCone(p, hero.facing, SHOCK_FAN.range, SHOCK_FAN.halfAngle, 14);
+        H.shake = 0.2;
+      }
     },
   },
 };
@@ -1174,6 +1187,22 @@ function hitAround(p, range, knock) {
     if (!g.alive) continue;
     const q = g.sprite.root.position;
     if (Math.hypot(q.x - p.x, q.z - p.z) < range + g.cfg.radius) { skillHit(g, p, knock); hit = true; }
+  }
+  if (hit) hitStop = 0.07;
+}
+// enemies within `range` of p and within `halfAngle` (rad) either side of `facing`
+function hitCone(p, facing, range, halfAngle, knock) {
+  const f = facingVec(facing), cos = Math.cos(halfAngle);
+  let hit = false;
+  for (const g of enemies) {
+    if (!g.alive) continue;
+    const q = g.sprite.root.position;
+    const to = new THREE.Vector3(q.x - p.x, 0, q.z - p.z);
+    const d = to.length();
+    if (d > range + g.cfg.radius) continue;
+    if (d > g.cfg.radius + HERO_RADIUS && f.dot(to.divideScalar(d)) < cos) continue;   // touching counts as in front
+    skillHit(g, p, knock);
+    hit = true;
   }
   if (hit) hitStop = 0.07;
 }
@@ -1308,18 +1337,23 @@ function critFx(p) {                      // a riposte lands
   });
   tone(520, 0.18, 0.08, "square", 260);
 }
-function shockFx(p) {                    // a ring racing out over the ground
+function shockFx(p) {                    // 검기 파동: a sword wave sweeping a fan ahead of the hero
+  const f = facingVec(hero.facing);
   if (efk.ctx) {
-    // Effekseer sword slash (tutorial 10) laid flat on the ground: two half sweeps back to back
-    // make a full circle; scaled so the blade edge (7 units) reaches the 4.5 m hit range.
-    const at = new THREE.Vector3(p.x, p.y + 0.15, p.z);
-    for (const turn of [0, Math.PI]) playFx(efk.shockSlash, at, { x: -Math.PI / 2, y: hero.facing + turn, z: 0 }, 0.64);
+    // Effekseer sword slash (tutorial 10) laid flat, its half circle opening forward. Its centre sits
+    // SHOCK_FAN.fxForward ahead so the blade edge (7 units x scale) reaches the fan's range.
+    const at = new THREE.Vector3(p.x, p.y + 0.15, p.z).addScaledVector(f, SHOCK_FAN.fxForward);
+    playFx(efk.shockSlash, at, { x: -Math.PI / 2, y: hero.facing + Math.PI, z: 0 }, SHOCK_FAN.fxScale);
     return;
   }
-  const m =new THREE.Mesh(new THREE.RingGeometry(0.82, 1.0, 64), fxMaterial("#e2f4ff"));
+  // fallback: a flat fan racing out over the ground. Laid flat by rotation.x = -π/2, ring angle θ points
+  // at world (cos θ, 0, -sin θ), so the fan centred on the facing starts at facing - π/2 - half.
+  const half = SHOCK_FAN.halfAngle;
+  const m = new THREE.Mesh(new THREE.RingGeometry(0.82, 1.0, 32, 1, hero.facing - Math.PI / 2 - half, half * 2),
+    fxMaterial("#e2f4ff"));
   m.rotation.x = -Math.PI / 2;
   m.position.copy(p).add(new THREE.Vector3(0, 0.12, 0));
-  addEffect(m, 0.4, (o, k) => { o.scale.setScalar(0.5 + k * 4.6); o.material.opacity = 0.95 * (1 - k); });
+  addEffect(m, 0.4, (o, k) => { o.scale.setScalar(0.5 + k * (SHOCK_FAN.range - 0.5)); o.material.opacity = 0.95 * (1 - k); });
 }
 
 // ---------- main ----------

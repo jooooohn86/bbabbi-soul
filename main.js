@@ -6,6 +6,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { Pass } from "three/addons/postprocessing/Pass.js";
 // [progression] growth system; every hook below checks it exists, so deleting this line and
 // progression.js removes it cleanly
 import { progression } from "./progression.js";
@@ -44,6 +45,50 @@ addEventListener("resize", resize);
 // Sunlit ground, flowers and metal glow softly; shadowed areas stay crisp.
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
+
+// ---------- Effekseer: authored particle effects (EffekseerForWebGL runtime in lib/) ----------
+// Drawn into the scene's buffer before the bloom, so they glow and pixelate like everything else,
+// and are depth-tested against the world. If the runtime or a file fails to load, the code-built
+// effects further down are used instead.
+const efk = { ctx: null, shockSlash: null, handles: [] };
+const EFK_MAX = 6;                                     // simultaneous effect instances
+const fxBytes = (url) => fetch(url).then((r) => r.arrayBuffer());
+function initEffekseer() {
+  if (typeof effekseer === "undefined") return console.warn("[fx] Effekseer runtime missing");
+  effekseer.initRuntime("lib/effekseer.wasm", async () => {
+    try {
+      const ctx = effekseer.createContext();
+      ctx.init(renderer.getContext());
+      ctx.setRestorationOfStatesFlag(false);           // three.js state is reset after each draw instead
+      const effect = ctx.loadEffect(await fxBytes("assets/fx/shock_slash.efkefc"), 1.0,
+        () => { efk.ctx = ctx; efk.shockSlash = effect; },
+        (m, url) => console.warn("[fx]", m, url),
+        (path) => "assets/fx/" + path);                // textures sit next to the effect
+    } catch (e) { console.warn("[fx] Effekseer unavailable", e); }
+  }, () => console.warn("[fx] Effekseer runtime failed to load"));
+}
+function playFx(effect, p, rot, scale) {
+  efk.handles = efk.handles.filter((h) => h.exists);
+  if (efk.handles.length >= EFK_MAX) efk.handles.shift().stop();
+  const h = efk.ctx.play(effect, p.x, p.y, p.z);
+  h.setRotation(rot.x, rot.y, rot.z);
+  h.setScale(scale, scale, scale);
+  efk.handles.push(h);
+  return h;
+}
+class EffekseerPass extends Pass {
+  constructor() { super(); this.needsSwap = false; }
+  render(renderer, writeBuffer, readBuffer) {
+    if (!efk.ctx || wire) return;
+    renderer.setRenderTarget(readBuffer);
+    efk.ctx.setProjectionMatrix(camera.projectionMatrix.elements);
+    efk.ctx.setCameraMatrix(camera.matrixWorldInverse.elements);
+    efk.ctx.draw();
+    renderer.resetState();
+  }
+}
+composer.addPass(new EffekseerPass());
+
 const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.4, 0.5, 0.45);  // strength, radius, threshold
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
@@ -947,6 +992,7 @@ const wireBtn = document.getElementById("wireBtn");
 let wire = false;
 function setWire(on) {
   wire = on;
+  if (on) efk.ctx?.stopAll();                    // Effekseer effects are hidden in wire mode (EffekseerPass skips them)
   for (const m of worldMeshes) m.material.wireframe = on;
   birdMat.wireframe = on;
   // solid shadows from wire geometry look wrong, so drop them while in wire mode
@@ -1259,7 +1305,14 @@ function critFx(p) {                      // a riposte lands
   tone(520, 0.18, 0.08, "square", 260);
 }
 function shockFx(p) {                    // a ring racing out over the ground
-  const m = new THREE.Mesh(new THREE.RingGeometry(0.82, 1.0, 64), fxMaterial("#e2f4ff"));
+  if (efk.ctx) {
+    // Effekseer sword slash (tutorial 10) laid flat on the ground: two half sweeps back to back
+    // make a full circle; scaled so the blade edge (7 units) reaches the 4.5 m hit range.
+    const at = new THREE.Vector3(p.x, p.y + 0.15, p.z);
+    for (const turn of [0, Math.PI]) playFx(efk.shockSlash, at, { x: -Math.PI / 2, y: hero.facing + turn, z: 0 }, 0.64);
+    return;
+  }
+  const m =new THREE.Mesh(new THREE.RingGeometry(0.82, 1.0, 64), fxMaterial("#e2f4ff"));
   m.rotation.x = -Math.PI / 2;
   m.position.copy(p).add(new THREE.Vector3(0, 0.12, 0));
   addEffect(m, 0.4, (o, k) => { o.scale.setScalar(0.5 + k * 4.6); o.material.opacity = 0.95 * (1 - k); });
@@ -1403,6 +1456,7 @@ function step(dt) {
   updateBirds(dt, p);
   updateAtmosphere(dt, p);
   updateEffects(dt);
+  efk.ctx?.update(dt * 60);                       // Effekseer counts in 60 fps frames; slows with the hit stop too
   updateEnemies(dt, p);
   for (const g of enemies) if (g.sprite.root.visible) g.sprite.update(dt, camera);
   if (dog) { dog.update(dt, p, hero.facing); dog.sprite.update(dt, camera); }
@@ -1413,6 +1467,7 @@ function step(dt) {
 
 async function main() {
   resize();
+  initEffekseer();
   const [atlas] = await Promise.all([
     fetch("assets/hero.json").then((r) => r.json()),
     loadWorld(),

@@ -10,7 +10,7 @@
 export const SKILLS = [
   { id: "spin", name: "회전베기", desc: "제자리에서 한 바퀴 돌며 주위의 적을 모두 벱니다" },
   { id: "pierce", name: "관통 찌르기", desc: "앞으로 돌진하며 경로의 적을 모두 꿰뚫습니다 (돌진 중 무적)" },
-  { id: "shock", name: "충격파", desc: "땅을 내리쳐 주변 적에게 피해를 주고 멀리 밀쳐 냅니다" },
+  { id: "shock", name: "검기 파동", desc: "땅을 내리쳐 검기를 사방으로 퍼뜨려 주변 적을 베고 밀쳐 냅니다" },
 ];
 
 export const MIND_BASE = 100;                       // max mind before any 정신력 stat

@@ -14,7 +14,7 @@
 import { SKILLS, MIND_BASE, unlockCost } from "./skills.js";
 
 const KEY = "ethra.progression.v1";
-const POINTS = { small: 0.5, mid: 1, large: 1.5, zombie: 0.5 };
+const POINTS = { small: 0.5, mid: 1, large: 1.5, zombie: 0.5, medusa: 1 };
 const STATS = {
   hp: { label: "체력", effect: (n) => `최대 체력 +${10 * n}` },
   atk: { label: "공격력", effect: (n) => `피해 +${4 * n}` },

@@ -73,6 +73,18 @@
     letter-spacing: 0.12em; color: #a3201b; text-shadow: 0 0 24px rgba(163, 32, 27, 0.45); }
   #death p { margin: 18px 0 0; color: rgba(241, 234, 216, 0.6); font: 14px "Pretendard", system-ui, sans-serif; }
 
+  /* medusa venom: stack pips under the bars, a green HP bar while poisoned, an edge glow */
+  #poison { display: flex; align-items: center; gap: 4px; font: 600 11px "Pretendard", system-ui, sans-serif;
+    color: #b8f27a; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
+  #poison[hidden] { display: none; }
+  #poison i { width: 9px; height: 9px; border: 1px solid rgba(184, 242, 122, 0.7); background: rgba(10, 12, 18, 0.7); }
+  #poison i.on { background: #7fd23f; }
+  #poisonText { margin-left: 4px; }
+  #hpBar.poisoned #hpFill { background: linear-gradient(#7fbf3f, #4b7d23); }
+  #vignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
+  #vignette.poison { opacity: 1; box-shadow: inset 0 0 140px rgba(96, 200, 60, 0.45); }
+  #vignette.stone { opacity: 1; box-shadow: inset 0 0 160px rgba(150, 150, 165, 0.6); }
+
   /* build version, bottom right (scripts/build_publish.py stamps it; "dev" when run from web/) */
   #ver { position: fixed; right: 16px; bottom: 12px; pointer-events: none; user-select: none;
     color: rgba(241, 234, 216, 0.8); font: 12px ui-monospace, monospace; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); }
@@ -90,18 +102,21 @@
   <div class="bar" id="hpBar"><span id="hpLag"></span><span id="hpFill"></span></div>
   <div class="bar" id="stBar"><span id="stFill"></span></div>
   <div class="bar" id="mpBar"><span id="mpFill"></span></div>
+  <div id="poison" hidden><span id="poisonPips"></span><span id="poisonText"></span></div>
 </div>
+<div id="vignette"></div>
 <div id="hud">
   <b>WASD</b> 이동 · <b>Shift</b> 달리기 · <b>Space</b> 구르기<br>
   <b>좌클릭</b> 공격 · <b>우클릭</b> 누르고 있기: 방어 (키보드 <b>J</b> · <b>K</b>)<br>
   <b>적 무기가 반짝일 때 우클릭</b>: 패링 → 1초 그로기(붉게 깜빡임), 그때 치명타<br>
   <b>마우스를 화면 좌우 끝으로</b> 카메라 회전 · <b>휠 버튼 드래그</b> · <b>Q / E</b><br>
   <b>F</b> 특수기 · <b>1~3</b> 특수기 선택 · <b>휠</b> 줌<br>
+  <b>메두사</b>: 독침 5번이면 중독 · <b>눈이 빛나면</b> 등을 돌리거나 구르기 (석화)<br>
   <b>P</b> 픽셀 크기 전환 · <b>G</b> 와이어프레임
 </div>
 <div id="skillbar"></div>
 <div id="dir"></div>
-<div id="ver">v14 · 2026-10-23</div>
+<div id="ver">v15 · 2026-10-23</div>
 <button id="wireBtn" type="button">와이어프레임 보기</button>
 <div id="death"><div class="msg"><h1>YOU DIED</h1><p>클릭하면 처음부터 다시 시작합니다</p></div></div>
 <div id="cover"><div><h2>Bbabbi Soul</h2><p>화면을 클릭하거나 아무 키나 누르면 시작합니다</p>

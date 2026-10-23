@@ -412,10 +412,19 @@ const GOBLINS = {
   zombie: { detect: 9, speed: 1.9, radius: 0.32, blob: 0.36, bush: 0, reach: 0.5, cooldown: 1.5,
             hp: 100, dmg: 9, hitFrame: 3, atkSpeed: 0.6, poise: 1, barY: 2.0, barW: 0.8,
             wander: true, wanderSpeed: 0.6, giveUp: 20, animRate: 0.55 },
+  // medusa: no melee. Holds the hero keepNear..keepFar away, lobs venom (VENOM / POISON below) and
+  // every gazeCooldown s stares (PETRIFY): the hero must look away or roll when her eyes flare.
+  medusa: { detect: 13, speed: 2.2, radius: 0.34, blob: 0.4, bush: 0, reach: 0.5, cooldown: 2.6,
+            hp: 140, dmg: 0, hitFrame: 99, atkSpeed: 1, poise: 1, barY: 2.15, barW: 0.8,
+            wander: true, wanderSpeed: 0.5, giveUp: 22,
+            spitter: true, keepNear: 6, keepFar: 11, spitRange: 13, releaseFrame: 3,
+            gazeRange: 12, gazeCooldown: 9, gazeSpeed: 0.67 },
 };
 for (const k of ["small", "mid", "large"]) GOBLINS[k].atlas = `goblin_${k}`;
 GOBLINS.zombie.atlas = "zombie";
+GOBLINS.medusa.atlas = "medusa";
 const ZOMBIE_COUNT = 90;
+const MEDUSA_COUNT = 5;
 const CULL = 46;           // monsters farther than this from the hero are hidden and skipped
 // wanted hideouts (x, z); each is moved to the nearest free, dry, off-path spot at load
 const HIDEOUTS = [
@@ -519,6 +528,8 @@ class Goblin {
     this.cooldown = 0;
     this.knock.set(0, 0, 0);
     this.riposteUntil = 0;
+    this.gazeCd = (this.cfg.gazeCooldown ?? 0) * 0.5;      // medusa: first stare comes sooner
+    this.gazing = false;
     const s = this.sprite;
     s.root.visible = !!this.cfg.wander;
     s.root.position.copy(this.home);
@@ -586,6 +597,27 @@ class Goblin {
     df = Math.atan2(Math.sin(df), Math.cos(df));
     s.facing += df * Math.min(1, dt * 4);
     s.state = "run";
+  }
+
+  // medusa, between motions: stare when ready, else spit when ready, else keep keepNear..keepFar away.
+  // returns the move (+1 toward the hero, -1 away, 0 hold)
+  spitterTurn(dt, dist) {
+    const cfg = this.cfg, s = this.sprite;
+    this.gazeCd -= dt;
+    if (this.gazeCd <= 0 && dist < cfg.gazeRange) {
+      s.playOnce("gaze", cfg.gazeSpeed);
+      this.gazeCd = cfg.gazeCooldown;
+      this.gazing = true;
+      gazeFx(this);
+      return 0;
+    }
+    if (this.cooldown <= 0 && dist < cfg.spitRange) {
+      s.playOnce("spit");
+      this.cooldown = cfg.cooldown;
+      this.spat = false;
+      return 0;
+    }
+    return dist < cfg.keepNear ? -1 : dist > cfg.keepFar ? 1 : 0;
   }
 
   // pushed out of props, kept on the map and on the ground
@@ -660,6 +692,7 @@ class Goblin {
 
     if (this.stagger > 0) {
       this.stagger -= dt;
+      this.gazing = false;                                  // a hit breaks the medusa's stare
     } else if (!H.dead) {
       // turn to face the hero, but commit once the blow is on its way
       const committed = s.oneShot && s.frame >= cfg.hitFrame - 1;
@@ -669,7 +702,9 @@ class Goblin {
         s.facing += df * Math.min(1, dt * 8);
       }
       const bodies = cfg.reach + cfg.radius + HERO_RADIUS;
-      if (!s.attacking) {
+      if (cfg.spitter) {
+        if (!s.attacking) move = this.spitterTurn(dt, dist);
+      } else if (!s.attacking) {
         const melee = this.kind !== "mid" || dist < cfg.meleeSwitch;   // the archer fights hand to hand up close
         if (melee) {
           if (dist > bodies) move = 1;
@@ -706,6 +741,15 @@ class Goblin {
       if (s.oneShot?.name === "shoot" && s.frame >= cfg.releaseFrame && !this.loosed) {
         this.loosed = true;
         fireArrow(p, heroPos, s.facing, cfg.arrowDmg);
+      }
+      // medusa: the glob leaves on the lunge frame; the stare lands when the gaze motion ends
+      if (s.oneShot?.name === "spit" && s.frame >= cfg.releaseFrame && !this.spat) {
+        this.spat = true;
+        spitVenom(this, heroPos);
+      }
+      if (this.gazing && s.oneShot?.name !== "gaze") {
+        this.gazing = false;
+        gazeLands(this);
       }
     }
     if (move) {
@@ -770,6 +814,140 @@ function updateArrows(dt) {
   }
 }
 
+// ---------- medusa: venom globs, poison puddles, poison stacks and the petrifying stare ----------
+// A glob is lobbed at where the hero stands, with a ring marking the landing spot. A direct hit
+// (or a block) adds a poison stack; it always leaves a puddle that adds a stack per second stood in.
+// POISON.max stacks: poisoned for POISON.time s at POISON.dps. Stacks fade one per POISON.decay s.
+const VENOM = { gravity: 14, flight: 0.75, hitRadius: 0.9, dmg: 4, puddleRadius: 1.0, puddleTime: 2.6, puddleTick: 1.0 };
+const POISON = { max: 5, decay: 3, time: 10, dps: 2 };
+// the stare: when the gaze motion ends, a hero within gazeRange facing her (inside ±60°) is slowed
+const PETRIFY = { time: 2.0, slow: 0.35, facing: Math.cos(THREE.MathUtils.degToRad(60)) };
+const venomGeo = new THREE.IcosahedronGeometry(0.14, 0);
+const venomMat = new THREE.MeshBasicMaterial({ color: "#8dff4a" });
+const globs = [], puddles = [];
+
+function spitVenom(m, target) {
+  const s = m.sprite;
+  const from = s.root.position.clone().addScaledVector(facingVec(s.facing), 0.3).add(new THREE.Vector3(0, 1.55, 0));
+  const at = target.clone();
+  at.y = groundY(at.x, at.z) ?? at.y;
+  const T = VENOM.flight + Math.hypot(at.x - from.x, at.z - from.z) * 0.02;   // farther: a little longer in the air
+  const v = new THREE.Vector3((at.x - from.x) / T, (at.y - from.y + 0.5 * VENOM.gravity * T * T) / T, (at.z - from.z) / T);
+  const glob = new THREE.Mesh(venomGeo, venomMat);
+  glob.position.copy(from);
+  const mark = new THREE.Mesh(new THREE.RingGeometry(VENOM.hitRadius * 0.8, VENOM.hitRadius, 32), fxMaterial("#9dff6a"));
+  mark.rotation.x = -Math.PI / 2;
+  mark.position.copy(at).add(new THREE.Vector3(0, 0.06, 0));
+  scene.add(glob, mark);
+  globs.push({ glob, mark, v, t: 0, T, at, src: m });
+  tone(320, 0.12, 0.04, "sawtooth", 180);
+}
+
+function makePuddle(at) {
+  const mat = new THREE.MeshBasicMaterial({ color: "#6fd13a", transparent: true, opacity: 0, depthWrite: false });
+  const m = new THREE.Mesh(new THREE.CircleGeometry(VENOM.puddleRadius, 24), mat);
+  m.rotation.x = -Math.PI / 2;
+  m.position.copy(at).add(new THREE.Vector3(0, 0.04, 0));
+  scene.add(m);
+  puddles.push({ m, t: 0, tick: 0.4 });
+}
+
+function updateVenom(dt) {
+  const hp = hero.root.position;
+  for (let i = globs.length - 1; i >= 0; i--) {
+    const g = globs[i];
+    g.t += dt;
+    g.v.y -= VENOM.gravity * dt;
+    g.glob.position.addScaledVector(g.v, dt);
+    g.mark.material.opacity = 0.35 + 0.55 * Math.abs(Math.sin(g.t * 10));
+    if (g.t < g.T) continue;
+    scene.remove(g.glob, g.mark);
+    g.mark.geometry.dispose();
+    g.mark.material.dispose();
+    globs.splice(i, 1);
+    if (Math.hypot(hp.x - g.at.x, hp.z - g.at.z) < VENOM.hitRadius) {
+      const r = damageHero(VENOM.dmg, g.src.sprite.root.position);
+      if (r === "hit" || r === "blocked") addPoison();                       // a guard stops the hurt, not the venom
+      else if (r === "parried" && g.src.alive) g.src.takeHit(COMBAT.heroDmg, hp);   // flicked back at her
+    }
+    makePuddle(g.at);
+  }
+  for (let i = puddles.length - 1; i >= 0; i--) {
+    const pd = puddles[i];
+    pd.t += dt;
+    const left = VENOM.puddleTime - pd.t;
+    pd.m.material.opacity = 0.5 * Math.min(1, pd.t / 0.15, left / 0.5);
+    pd.m.scale.setScalar(1 + 0.04 * Math.sin(pd.t * 9));                      // a slow bubbling
+    if (Math.hypot(hp.x - pd.m.position.x, hp.z - pd.m.position.z) < VENOM.puddleRadius) {
+      pd.tick -= dt;
+      if (pd.tick <= 0) { pd.tick = VENOM.puddleTick; addPoison(); }
+    } else pd.tick = 0.4;
+    if (left <= 0) {
+      scene.remove(pd.m);
+      pd.m.geometry.dispose();
+      pd.m.material.dispose();
+      puddles.splice(i, 1);
+    }
+  }
+}
+
+function addPoison() {
+  if (H.dead || H.poisonT > 0) return;                    // already poisoned: stacks wait until it wears off
+  H.poisonStacks++;
+  H.poisonDecay = POISON.decay;
+  if (H.poisonStacks >= POISON.max) {
+    H.poisonStacks = 0;
+    H.poisonT = POISON.time;
+    H.poisonTick = 1;
+    tone(150, 0.4, 0.07, "sawtooth", 90);
+  }
+}
+
+function updatePoison(dt) {
+  if (H.dead) return;
+  if (H.poisonT > 0) {
+    H.poisonT -= dt;
+    H.poisonTick -= dt;
+    if (H.poisonTick <= 0) {
+      H.poisonTick += 1;
+      H.hp -= POISON.dps * COMBAT.damageTaken;
+      H.lagWait = 0.6;
+      if (H.hp <= 0) killHero();
+    }
+  } else if (H.poisonStacks > 0) {
+    H.poisonDecay -= dt;
+    if (H.poisonDecay <= 0) { H.poisonStacks--; H.poisonDecay = POISON.decay; }
+  }
+  if (H.petrifyT > 0) H.petrifyT -= dt;
+}
+
+// her eyes flare for the whole wind-up of the stare
+function gazeFx(m) {
+  const s = m.sprite;
+  const dur = s.atlas.anims.dir0_gaze.frames.length / (s.atlas.anims.dir0_gaze.fps * m.cfg.gazeSpeed);
+  const star = starMesh(0.8, "#f6ec5a");
+  addEffect(star, dur, (o, k) => {
+    o.position.copy(s.root.position).add(new THREE.Vector3(0, 1.72, 0)).addScaledVector(facingVec(s.facing), 0.12);
+    o.quaternion.copy(camera.quaternion);
+    o.rotateZ(k * 3);
+    o.scale.setScalar(0.4 + k * 1.1 + 0.15 * Math.sin(k * 40));
+    o.material.opacity = 0.6 + 0.4 * k;
+  });
+  if (s.root.position.distanceTo(hero.root.position) < 16) tone(880, 0.5, 0.05, "triangle", 1320);
+}
+
+function gazeLands(m) {
+  if (H.dead || !m.alive) return;
+  const hp = hero.root.position, q = m.sprite.root.position;
+  const to = new THREE.Vector3(q.x - hp.x, 0, q.z - hp.z);
+  const d = to.length();
+  if (d > m.cfg.gazeRange) return;
+  if (H.roll && H.roll.t >= COMBAT.iFrom && H.roll.t <= COMBAT.iTo) return;       // rolled through it
+  if (facingVec(hero.facing).dot(to.divideScalar(d)) < PETRIFY.facing) return;    // looked away
+  H.petrifyT = PETRIFY.time;
+  tone(110, 0.5, 0.08, "square", 70);
+}
+
 function updateEnemies(dt, heroPos) {
   for (const g of enemies) {
     g.update(dt, heroPos);
@@ -795,6 +973,7 @@ function updateEnemies(dt, heroPos) {
       }
     }
   updateArrows(dt);
+  updateVenom(dt);
 }
 
 async function loadEnemies() {
@@ -830,6 +1009,22 @@ async function loadEnemies() {
     const tex = byKind.zombie.tex.clone();
     tex.needsUpdate = true;
     enemies.push(new Goblin("zombie", byKind.zombie.atlas, tex, x, z));
+  }
+  // medusas: a few spitters among the zombies, spread round the ring (own seed: the zombie layout stays)
+  seed = 11;
+  const mspots = [];
+  for (let t = 0; t < 4000 && mspots.length < MEDUSA_COUNT; t++) {
+    const x = (rand() * 2 - 1) * 40, z = (rand() * 2 - 1) * 40;
+    const r = Math.max(Math.abs(x), Math.abs(z));
+    if (r < 30 || r > 40 || groundY(x, z) === null) continue;
+    if (!colliders.every((c) => Math.hypot(x - c.x, z - c.z) > c.r + 0.8)) continue;
+    if (!mspots.every((q) => Math.hypot(x - q[0], z - q[1]) > 14)) continue;
+    mspots.push([x, z]);
+  }
+  for (const [x, z] of mspots) {
+    const tex = byKind.medusa.tex.clone();
+    tex.needsUpdate = true;
+    enemies.push(new Goblin("medusa", byKind.medusa.atlas, tex, x, z));
   }
 }
 
@@ -1045,10 +1240,15 @@ const H = {
   guardPressAt: -1e9,                           // ms timestamp the guard was last raised (for parries)
   flash: 0, shake: 0, swingHit: false, lag: 100, lagWait: 0, buffered: null,
   knock: new THREE.Vector3(),                   // knockback velocity, decays
+  poisonStacks: 0, poisonDecay: 0, poisonT: 0, poisonTick: 0,   // medusa venom (see POISON)
+  petrifyT: 0,                                  // s left slowed by a medusa's stare (see PETRIFY)
 };
 if (typeof progression !== "undefined") progression.apply(COMBAT, H);   // [progression] saved stats
 let hitStop = 0;
 const hpFill = document.getElementById("hpFill"), hpLag = document.getElementById("hpLag");
+const hpBarEl = document.getElementById("hpBar"), vignette = document.getElementById("vignette");
+const poisonEl = document.getElementById("poison"), poisonText = document.getElementById("poisonText");
+const poisonPips = Array.from({ length: POISON.max }, () => document.getElementById("poisonPips").appendChild(document.createElement("i")));
 const stFill = document.getElementById("stFill"), stBar = document.getElementById("stBar");
 const mpFill = document.getElementById("mpFill");
 const deathEl = document.getElementById("death");
@@ -1122,6 +1322,18 @@ function updateHud(dt) {
   stBar.classList.toggle("empty", H.st <= 0);
   mpFill.style.width = `${(H.mind / H.maxMind) * 100}%`;
   skillBar.classList.toggle("nomind", H.mind < COMBAT.skillMind);
+  // poison: stack pips (the newest one fades as it is about to drop) or the poisoned countdown
+  const poisoned = H.poisonT > 0;
+  poisonEl.hidden = !(poisoned || H.poisonStacks > 0);
+  if (!poisonEl.hidden) {
+    poisonPips.forEach((pip, i) => {
+      pip.className = poisoned ? "on" : i < H.poisonStacks ? "on" : "";
+      pip.style.opacity = !poisoned && i === H.poisonStacks - 1 ? 0.35 + 0.65 * (H.poisonDecay / POISON.decay) : "";
+    });
+    poisonText.textContent = poisoned ? `중독 ${Math.ceil(H.poisonT)}초` : `독 ${H.poisonStacks}/${POISON.max}`;
+  }
+  hpBarEl.classList.toggle("poisoned", poisoned);
+  vignette.className = poisoned ? "poison" : H.petrifyT > 0 ? "stone" : "";
 }
 
 // ---------- special skills (see skills.js): F uses the equipped one, number keys pick it ----------
@@ -1421,7 +1633,7 @@ function step(dt) {
     if (move.lengthSq() > 0) {
       sprinting = (keys.has("ShiftLeft") || keys.has("ShiftRight")) && !busy && H.st > 0;
       // attacking or guarding: creep at 10% speed, keeping the current facing (shuffle/strafe)
-      const speed = (sprinting ? 5.2 : 3.0) * (busy ? 0.1 : 1);
+      const speed = (sprinting ? 5.2 : 3.0) * (busy ? 0.1 : 1) * (H.petrifyT > 0 ? PETRIFY.slow : 1);
       p.addScaledVector(move, speed * dt);
       if (!busy) {
         let d = Math.atan2(move.x, move.z) - hero.facing;
@@ -1444,6 +1656,7 @@ function step(dt) {
 
   if (H.skill) updateSkill(dt, p);
   if (!H.dead) H.mind = Math.min(H.maxMind, H.mind + COMBAT.mindRegen * dt);
+  updatePoison(dt);
 
   // the sword lands on its hit frame: every goblin in reach and in front takes it
   if (hero.oneShot?.name === "attack" && hero.frame >= COMBAT.heroHitFrame && !H.swingHit) {
@@ -1472,7 +1685,10 @@ function step(dt) {
 
   // hurt flash
   H.flash -= dt;
-  hero.mat.color.setRGB(1, H.flash > 0 ? 0.4 : 1, H.flash > 0 ? 0.4 : 1);
+  if (H.flash > 0) hero.mat.color.setRGB(1, 0.4, 0.4);
+  else if (H.petrifyT > 0) hero.mat.color.setRGB(0.62, 0.62, 0.68);   // petrified: stony grey
+  else if (H.poisonT > 0) hero.mat.color.setRGB(0.78, 1, 0.7);        // poisoned: a sickly green
+  else hero.mat.color.setRGB(1, 1, 1);
 
   // orbit camera around the hero (shakes briefly when he is hit)
   const look = p.clone().add(new THREE.Vector3(0, 1.0, 0));

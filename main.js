@@ -1516,7 +1516,7 @@ function updateGoals(dt) {
     const fx = p.x - camera.position.x, fz = p.z - camera.position.z;           // the screen's "up" on the ground
     // clockwise angle from screen-up; screen-right on the ground is (-fz, fx)
     const ang = Math.atan2(dz * fx - dx * fz, dx * fx + dz * fz);
-    objectiveEl.innerHTML = `<span class="arrow" style="transform: rotate(${ang}rad)">▲</span>목표 · ${queen.cfg.name} 처치 <b>${Math.round(Math.hypot(dx, dz))}m</b>`;
+    objectiveEl.innerHTML = `<span class="arrow" style="transform: rotate(${ang}rad)"></span>목표 · ${queen.cfg.name} 처치 <b>${Math.round(Math.hypot(dx, dz))}m</b>`;
   } else if (typeof progression !== "undefined" && progression.data.queenDefeated) {
     objectiveEl.innerHTML = `${GOBLINS.queen.name} 처치 완료 · 누적 사망 ${progression.data.deaths}회`;
   }
@@ -1734,7 +1734,7 @@ function starMesh(size, color) {          // a 4-point twinkle, faced to the cam
 }
 function glintFx(enemy) {                 // the attacker's weapon flashes just before the blow
   const p = enemy.sprite.root.position;
-  const m = starMesh(0.9, "#fff6c8");
+  const m = starMesh(0.45, "#fff6c8");                // small: a cue, not a curtain over the fight
   const f = facingVec(enemy.sprite.facing);
   m.position.copy(p).addScaledVector(f, 0.45).add(new THREE.Vector3(0, enemy.cfg.barY * 0.75, 0));
   addEffect(m, 0.22, (o, k) => {

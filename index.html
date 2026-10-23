@@ -104,7 +104,9 @@
     font: 12px "Pretendard", system-ui, sans-serif; }
   #objective:empty { display: none; }
   #objective b { color: #ffd479; font-weight: 600; margin-left: 6px; }
-  #objective .arrow { display: inline-block; margin-right: 8px; color: #ffd479; }
+  /* an arrowhead longer than it is wide, notched at the back, so its heading reads at a glance */
+  #objective .arrow { display: inline-block; width: 9px; height: 15px; margin-right: 9px; vertical-align: -3px;
+    background: #ffd479; clip-path: polygon(50% 0, 100% 100%, 50% 72%, 0 100%); }
   #boss { position: fixed; left: 50%; bottom: 112px; transform: translateX(-50%); width: min(560px, 70vw);
     pointer-events: none; color: #f1ead8; font: 13px "Pretendard", system-ui, sans-serif;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); }
@@ -159,7 +161,7 @@
 </div>
 <div id="skillbar"></div>
 <div id="dir"></div>
-<div id="ver">v17 · 2026-10-23</div>
+<div id="ver">v18 · 2026-10-23</div>
 <button id="wireBtn" type="button">와이어프레임 보기</button>
 <div id="death"><div class="msg"><h1>YOU DIED</h1><p>클릭하면 처음부터 다시 시작합니다</p></div></div>
 <div id="cover"><div><h2>Bbabbi Soul</h2><p>화면을 클릭하거나 아무 키나 누르면 시작합니다</p>

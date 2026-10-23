@@ -418,7 +418,7 @@ const GOBLINS = {
             hp: 140, dmg: 0, hitFrame: 99, atkSpeed: 1, poise: 1, barY: 2.15, barW: 0.8,
             wander: true, wanderSpeed: 0.5, giveUp: 22,
             spitter: true, keepNear: 6, keepFar: 11, spitRange: 13, releaseFrame: 3,
-            gazeRange: 12, gazeCooldown: 9, gazeSpeed: 0.67 },
+            gazeRange: 8, gazeCooldown: 9, gazeSpeed: 0.67 },   // 8 m ≈ half the screen width at the default zoom
 };
 for (const k of ["small", "mid", "large"]) GOBLINS[k].atlas = `goblin_${k}`;
 GOBLINS.zombie.atlas = "zombie";
@@ -1248,7 +1248,7 @@ let hitStop = 0;
 const hpFill = document.getElementById("hpFill"), hpLag = document.getElementById("hpLag");
 const hpBarEl = document.getElementById("hpBar"), vignette = document.getElementById("vignette");
 const poisonEl = document.getElementById("poison"), poisonText = document.getElementById("poisonText");
-const poisonPips = Array.from({ length: POISON.max }, () => document.getElementById("poisonPips").appendChild(document.createElement("i")));
+const poisonFill = document.getElementById("poisonFill");
 const stFill = document.getElementById("stFill"), stBar = document.getElementById("stBar");
 const mpFill = document.getElementById("mpFill");
 const deathEl = document.getElementById("death");
@@ -1322,15 +1322,16 @@ function updateHud(dt) {
   stBar.classList.toggle("empty", H.st <= 0);
   mpFill.style.width = `${(H.mind / H.maxMind) * 100}%`;
   skillBar.classList.toggle("nomind", H.mind < COMBAT.skillMind);
-  // poison: stack pips (the newest one fades as it is about to drop) or the poisoned countdown
+  // poison build-up meter (bottom centre, Elden Ring style): fills with stacks and drains smoothly
+  // as they fade; once poisoned it turns violet and drains over the poison time
   const poisoned = H.poisonT > 0;
   poisonEl.hidden = !(poisoned || H.poisonStacks > 0);
   if (!poisonEl.hidden) {
-    poisonPips.forEach((pip, i) => {
-      pip.className = poisoned ? "on" : i < H.poisonStacks ? "on" : "";
-      pip.style.opacity = !poisoned && i === H.poisonStacks - 1 ? 0.35 + 0.65 * (H.poisonDecay / POISON.decay) : "";
-    });
-    poisonText.textContent = poisoned ? `중독 ${Math.ceil(H.poisonT)}초` : `독 ${H.poisonStacks}/${POISON.max}`;
+    const fill = poisoned ? H.poisonT / POISON.time
+      : (H.poisonStacks - 1 + H.poisonDecay / POISON.decay) / POISON.max;
+    poisonFill.style.width = `${Math.max(0, Math.min(1, fill)) * 100}%`;
+    poisonEl.classList.toggle("active", poisoned);
+    poisonText.textContent = poisoned ? `중독 ${Math.ceil(H.poisonT)}초` : "독";
   }
   hpBarEl.classList.toggle("poisoned", poisoned);
   vignette.className = poisoned ? "poison" : H.petrifyT > 0 ? "stone" : "";

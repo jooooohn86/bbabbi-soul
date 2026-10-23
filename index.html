@@ -73,13 +73,20 @@
     letter-spacing: 0.12em; color: #a3201b; text-shadow: 0 0 24px rgba(163, 32, 27, 0.45); }
   #death p { margin: 18px 0 0; color: rgba(241, 234, 216, 0.6); font: 14px "Pretendard", system-ui, sans-serif; }
 
-  /* medusa venom: stack pips under the bars, a green HP bar while poisoned, an edge glow */
-  #poison { display: flex; align-items: center; gap: 4px; font: 600 11px "Pretendard", system-ui, sans-serif;
-    color: #b8f27a; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
+  /* medusa venom: a build-up meter at the bottom centre (above the skill bar), a green HP bar while
+     poisoned, an edge glow */
+  #poison { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 8px; pointer-events: none; font: 600 12px "Pretendard", system-ui, sans-serif; color: #c6f08e;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); }
   #poison[hidden] { display: none; }
-  #poison i { width: 9px; height: 9px; border: 1px solid rgba(184, 242, 122, 0.7); background: rgba(10, 12, 18, 0.7); }
-  #poison i.on { background: #7fd23f; }
-  #poisonText { margin-left: 4px; }
+  #poison .icon { width: 14px; height: 14px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    background: #7fd23f; box-shadow: 0 0 6px rgba(127, 210, 63, 0.7); }
+  #poison .meter { position: relative; width: 220px; height: 8px; background: rgba(10, 12, 18, 0.8);
+    border: 1px solid rgba(198, 240, 142, 0.45); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6); }
+  #poisonFill { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(#a6e35a, #5f9f2a); }
+  #poison.active #poisonFill { background: linear-gradient(#b07ad8, #6d3f9c); }
+  #poison.active { color: #d9b8f2; }
+  #poisonText { min-width: 56px; }
   #hpBar.poisoned #hpFill { background: linear-gradient(#7fbf3f, #4b7d23); }
   #vignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
   #vignette.poison { opacity: 1; box-shadow: inset 0 0 140px rgba(96, 200, 60, 0.45); }
@@ -102,8 +109,8 @@
   <div class="bar" id="hpBar"><span id="hpLag"></span><span id="hpFill"></span></div>
   <div class="bar" id="stBar"><span id="stFill"></span></div>
   <div class="bar" id="mpBar"><span id="mpFill"></span></div>
-  <div id="poison" hidden><span id="poisonPips"></span><span id="poisonText"></span></div>
 </div>
+<div id="poison" hidden><span class="icon"></span><div class="meter"><span id="poisonFill"></span></div><span id="poisonText"></span></div>
 <div id="vignette"></div>
 <div id="hud">
   <b>WASD</b> 이동 · <b>Shift</b> 달리기 · <b>Space</b> 구르기<br>
@@ -116,7 +123,7 @@
 </div>
 <div id="skillbar"></div>
 <div id="dir"></div>
-<div id="ver">v15 · 2026-10-23</div>
+<div id="ver">v16 · 2026-10-23</div>
 <button id="wireBtn" type="button">와이어프레임 보기</button>
 <div id="death"><div class="msg"><h1>YOU DIED</h1><p>클릭하면 처음부터 다시 시작합니다</p></div></div>
 <div id="cover"><div><h2>Bbabbi Soul</h2><p>화면을 클릭하거나 아무 키나 누르면 시작합니다</p>

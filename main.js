@@ -1026,7 +1026,7 @@ const COMBAT = {
 };
 // parry: the guard (right button / K) newly raised within `window` ms before a blow lands from the front
 const PARRY = {
-  window: 150,          // ms: the parry timing window
+  window: 350,          // ms: the parry timing window (covers the glint, which shows GLINT_LEAD = 280 ms ahead)
   stagger: 1.0,         // s the attacker is groggy: frozen, flashing red, open to a riposte
   riposte: 2.5,         // damage multiplier of the first hit on a parried enemy
   mind: 5,              // mind regained by a parry

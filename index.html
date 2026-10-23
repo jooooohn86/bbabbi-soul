@@ -72,6 +72,10 @@
   #death h1 { margin: 0; font: 400 clamp(48px, 9vw, 112px) "Times New Roman", Georgia, serif;
     letter-spacing: 0.12em; color: #a3201b; text-shadow: 0 0 24px rgba(163, 32, 27, 0.45); }
   #death p { margin: 18px 0 0; color: rgba(241, 234, 216, 0.6); font: 14px "Pretendard", system-ui, sans-serif; }
+
+  /* build version, bottom right (scripts/build_publish.py stamps it; "dev" when run from web/) */
+  #ver { position: fixed; right: 16px; bottom: 12px; pointer-events: none; user-select: none;
+    color: rgba(241, 234, 216, 0.8); font: 12px ui-monospace, monospace; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); }
 </style>
 <script type="importmap">
 { "imports": {
@@ -97,6 +101,7 @@
 </div>
 <div id="skillbar"></div>
 <div id="dir"></div>
+<div id="ver">v14 · 2026-10-23</div>
 <button id="wireBtn" type="button">와이어프레임 보기</button>
 <div id="death"><div class="msg"><h1>YOU DIED</h1><p>클릭하면 처음부터 다시 시작합니다</p></div></div>
 <div id="cover"><div><h2>Bbabbi Soul</h2><p>화면을 클릭하거나 아무 키나 누르면 시작합니다</p>

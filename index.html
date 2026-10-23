@@ -75,7 +75,7 @@
 
   /* medusa venom: a build-up meter at the bottom centre (above the skill bar), a green HP bar while
      poisoned, an edge glow */
-  #poison { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); display: flex; align-items: center;
+  #poison { position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%); display: flex; align-items: center;
     gap: 8px; pointer-events: none; font: 600 12px "Pretendard", system-ui, sans-serif; color: #c6f08e;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); }
   #poison[hidden] { display: none; }
@@ -91,6 +91,37 @@
   #vignette { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
   #vignette.poison { opacity: 1; box-shadow: inset 0 0 140px rgba(96, 200, 60, 0.45); }
   #vignette.stone { opacity: 1; box-shadow: inset 0 0 160px rgba(150, 150, 165, 0.6); }
+
+  /* goals: area name card, objective line with an arrow to the boss, the boss bar, toasts, the win card */
+  #zone { position: fixed; left: 50%; top: 26%; transform: translateX(-50%); pointer-events: none; opacity: 0;
+    padding: 6px 48px; color: #f1ead8; white-space: nowrap; letter-spacing: 0.18em;
+    font: 400 clamp(22px, 3.2vw, 36px) "Times New Roman", Georgia, serif; text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+    border-top: 1px solid rgba(241, 234, 216, 0.35); border-bottom: 1px solid rgba(241, 234, 216, 0.35); }
+  #zone.show { animation: card 3.6s ease-in-out forwards; }
+  @keyframes card { 0% { opacity: 0; } 18% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+  #objective { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); pointer-events: none;
+    padding: 5px 12px; border-radius: 6px; background: var(--panel); color: var(--fg); white-space: nowrap;
+    font: 12px "Pretendard", system-ui, sans-serif; }
+  #objective:empty { display: none; }
+  #objective b { color: #ffd479; font-weight: 600; margin-left: 6px; }
+  #objective .arrow { display: inline-block; margin-right: 8px; color: #ffd479; }
+  #boss { position: fixed; left: 50%; bottom: 112px; transform: translateX(-50%); width: min(560px, 70vw);
+    pointer-events: none; color: #f1ead8; font: 13px "Pretendard", system-ui, sans-serif;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9); }
+  #boss[hidden] { display: none; }
+  #boss .bar { height: 9px; margin-top: 4px; background: rgba(10, 12, 18, 0.85); border: 1px solid rgba(241, 234, 216, 0.3); }
+  #bossFill { display: block; height: 100%; background: linear-gradient(#b8323a, #761c22); transition: width 0.25s; }
+  #toast { position: fixed; left: 50%; top: 62%; transform: translateX(-50%); pointer-events: none; opacity: 0;
+    color: #f1ead8; font: 600 18px "Pretendard", system-ui, sans-serif; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9); }
+  #toast.show { animation: card 2.4s ease-in-out forwards; }
+  #toast.gold { color: #ffd479; }
+  #toast.rage { color: #ff8a80; }
+  #victory { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; opacity: 0; text-align: center; }
+  #victory.show { animation: card 6s ease-in-out forwards; }
+  #victory h2 { margin: 0; color: #e8c25a; letter-spacing: 0.14em; font: 400 clamp(40px, 7vw, 84px) "Times New Roman", Georgia, serif;
+    text-shadow: 0 0 24px rgba(232, 194, 90, 0.45), 0 2px 6px rgba(0, 0, 0, 0.9); }
+  #victory p { margin: 12px 0 0; color: rgba(241, 234, 216, 0.85); font: 15px "Pretendard", system-ui, sans-serif;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9); }
 
   /* build version, bottom right (scripts/build_publish.py stamps it; "dev" when run from web/) */
   #ver { position: fixed; right: 16px; bottom: 12px; pointer-events: none; user-select: none;
@@ -111,6 +142,11 @@
   <div class="bar" id="mpBar"><span id="mpFill"></span></div>
 </div>
 <div id="poison" hidden><span class="icon"></span><div class="meter"><span id="poisonFill"></span></div><span id="poisonText"></span></div>
+<div id="objective"></div>
+<div id="zone"></div>
+<div id="boss" hidden><span>메두사 여왕</span><div class="bar"><span id="bossFill"></span></div></div>
+<div id="toast"></div>
+<div id="victory"><div><h2></h2><p></p></div></div>
 <div id="vignette"></div>
 <div id="hud">
   <b>WASD</b> 이동 · <b>Shift</b> 달리기 · <b>Space</b> 구르기<br>
@@ -123,7 +159,7 @@
 </div>
 <div id="skillbar"></div>
 <div id="dir"></div>
-<div id="ver">v16 · 2026-10-23</div>
+<div id="ver">v17 · 2026-10-23</div>
 <button id="wireBtn" type="button">와이어프레임 보기</button>
 <div id="death"><div class="msg"><h1>YOU DIED</h1><p>클릭하면 처음부터 다시 시작합니다</p></div></div>
 <div id="cover"><div><h2>Bbabbi Soul</h2><p>화면을 클릭하거나 아무 키나 누르면 시작합니다</p>

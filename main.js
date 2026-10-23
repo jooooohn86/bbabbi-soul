@@ -419,12 +419,28 @@ const GOBLINS = {
             wander: true, wanderSpeed: 0.5, giveUp: 22,
             spitter: true, keepNear: 6, keepFar: 11, spitRange: 13, releaseFrame: 3,
             gazeRange: 8, gazeCooldown: 9, gazeSpeed: 0.67 },   // 8 m ≈ half the screen width at the default zoom
+  // boss, the medusa queen: the medusa scaled up and gilded, waiting in her nest (ARENA) in the
+  // infected zone. Fans of venom (volley), a venom burst round her when the hero closes in
+  // (burst*: a red ring warns first), the stare. Below rageAt of her health she rages: more globs,
+  // shorter waits. Leaves her nest only up to `arena` m; the hero leaving (`leash`) resets her.
+  queen: { detect: 14, speed: 2.0, radius: 0.75, blob: 0.4, bush: 0, reach: 0.5, cooldown: 2.4,
+           hp: 1400, dmg: 0, hitFrame: 99, atkSpeed: 1, poise: 8, barY: 2.15, barW: 0.8,
+           boss: true, name: "메두사 여왕", scale: 1.8, tint: [1, 0.86, 0.55], reward: 20,
+           arena: 9, leash: 26,
+           spitter: true, keepNear: 5, keepFar: 9, spitRange: 14, releaseFrame: 3,
+           volley: 3, rageVolley: 5, volleySpread: 1.7,
+           gazeRange: 10, gazeCooldown: 10, gazeSpeed: 0.67,
+           burstRange: 3.6, burstRadius: 3.8, burstDmg: 22, burstCooldown: 5, burstSpeed: 0.45,
+           rageAt: 0.5, rageSpeed: 0.7, rageText: "여왕이 분노한다" },
 };
 for (const k of ["small", "mid", "large"]) GOBLINS[k].atlas = `goblin_${k}`;
 GOBLINS.zombie.atlas = "zombie";
 GOBLINS.medusa.atlas = "medusa";
+GOBLINS.queen.atlas = "medusa";
 const ZOMBIE_COUNT = 90;
 const MEDUSA_COUNT = 5;
+const ARENA = { want: new THREE.Vector2(34, -34), pos: null, clear: 14 };   // the queen's nest (found at load)
+let queen = null;
 const CULL = 46;           // monsters farther than this from the hero are hidden and skipped
 // wanted hideouts (x, z); each is moved to the nearest free, dry, off-path spot at load
 const HIDEOUTS = [
@@ -494,6 +510,7 @@ class Goblin {
     this.cfg = GOBLINS[kind];
     this.sprite = new SpriteCharacter(atlas, tex, { blobRadius: this.cfg.blob });
     this.sprite.animRate = this.cfg.animRate ?? 1;
+    if (this.cfg.scale) this.sprite.root.scale.setScalar(this.cfg.scale);
     this.home = new THREE.Vector3(x, groundY(x, z) ?? 0, z);
     this.bush = this.cfg.bush ? makeBush(this.cfg.bush) : null;
     if (this.bush) { this.bush.position.copy(this.home); scene.add(this.bush); }
@@ -530,13 +547,16 @@ class Goblin {
     this.riposteUntil = 0;
     this.gazeCd = (this.cfg.gazeCooldown ?? 0) * 0.5;      // medusa: first stare comes sooner
     this.gazing = false;
+    this.bursting = false;
+    this.burstCd = 0;
+    this.raged = false;
     const s = this.sprite;
-    s.root.visible = !!this.cfg.wander;
+    s.root.visible = !!this.cfg.wander || !!this.cfg.boss;  // the boss waits in plain sight in her nest
     s.root.position.copy(this.home);
     s.oneShot = null;
     s.mat.opacity = 1;
     s.mat.transparent = false;
-    s.mat.color.set(1, 1, 1);
+    s.mat.color.setRGB(...(this.cfg.tint ?? [1, 1, 1]));
     this.bar.visible = false;
   }
 
@@ -559,19 +579,23 @@ class Goblin {
     this.flash = 0.15;
     const p = this.sprite.root.position;
     const away = p.clone().sub(from).setY(0).normalize();
-    p.addScaledVector(away, this.kind === "large" ? 0.12 : 0.35);
+    const heavy = this.kind === "large" || this.cfg.boss;
+    p.addScaledVector(away, heavy ? 0.12 : 0.35);
     if (knock) {
-      this.knock.copy(away).multiplyScalar(knock * (this.kind === "large" ? 0.4 : 1));
-      this.stagger = Math.max(this.stagger, 0.7);
-      this.sprite.oneShot = null;
+      this.knock.copy(away).multiplyScalar(knock * (this.cfg.boss ? 0.15 : heavy ? 0.4 : 1));
+      if (!this.cfg.boss) {                                 // the boss shrugs a shockwave off
+        this.stagger = Math.max(this.stagger, 0.7);
+        this.sprite.oneShot = null;
+      }
     }
     if (this.hits % this.cfg.poise === 0) {                 // poise broken: the attack is cancelled
-      this.stagger = this.kind === "large" ? 0.6 : 0.45;
+      this.stagger = heavy ? 0.6 : 0.45;
       this.sprite.oneShot = null;
     }
-    this.bar.visible = true;
+    this.bar.visible = !this.cfg.boss;                     // the boss has the big bar at the bottom
     if (this.hp <= 0) {
       if (typeof progression !== "undefined") progression.onKill(this.kind);   // [progression] points
+      if (this.cfg.boss) bossDefeated(this);
       this.state = "dead";
       this.deadT = 0;
       this.sprite.oneShot = null;
@@ -603,17 +627,34 @@ class Goblin {
   // returns the move (+1 toward the hero, -1 away, 0 hold)
   spitterTurn(dt, dist) {
     const cfg = this.cfg, s = this.sprite;
+    // boss: rage below rageAt of her health (more globs, shorter waits)
+    if (cfg.rageAt && !this.raged && this.hp < cfg.hp * cfg.rageAt) {
+      this.raged = true;
+      showToast(cfg.rageText, "rage");
+      tone(90, 0.8, 0.09, "sawtooth", 60);
+    }
+    const wait = this.raged ? cfg.rageSpeed : 1;
     this.gazeCd -= dt;
+    this.burstCd -= dt;
+    // boss, hero too close: a venom burst all round her, warned by a red ring on the ground
+    if (cfg.burstRange && this.burstCd <= 0 && dist < cfg.burstRange) {
+      s.playOnce("spit", cfg.burstSpeed);
+      this.bursting = true;
+      this.spat = false;
+      this.burstCd = cfg.burstCooldown * wait;
+      burstWarnFx(this);
+      return 0;
+    }
     if (this.gazeCd <= 0 && dist < cfg.gazeRange) {
       s.playOnce("gaze", cfg.gazeSpeed);
-      this.gazeCd = cfg.gazeCooldown;
+      this.gazeCd = cfg.gazeCooldown * wait;
       this.gazing = true;
       gazeFx(this);
       return 0;
     }
     if (this.cooldown <= 0 && dist < cfg.spitRange) {
       s.playOnce("spit");
-      this.cooldown = cfg.cooldown;
+      this.cooldown = cfg.cooldown * wait;
       this.spat = false;
       return 0;
     }
@@ -654,8 +695,11 @@ class Goblin {
         return;
       }
     }
-    // hero gone far away: back into hiding (a dead goblin respawns this way)
-    if (heroPos.distanceTo(this.home) > LEASH && heroPos.distanceTo(p) > 22) { this.hide(); return; }
+    // hero gone far away: back into hiding (a dead goblin respawns this way). The boss resets to
+    // full health when the hero leaves her nest, but once beaten she stays gone.
+    if (cfg.boss) {
+      if (this.state !== "dead" && heroPos.distanceTo(this.home) > cfg.leash) { this.hide(); return; }
+    } else if (heroPos.distanceTo(this.home) > LEASH && heroPos.distanceTo(p) > 22) { this.hide(); return; }
     if (this.state === "dead") {                            // fade out and sink, then stay gone
       this.deadT += dt;
       s.mat.opacity = Math.max(0, 1 - this.deadT / 0.8);
@@ -669,7 +713,7 @@ class Goblin {
     else if (this.riposteUntil > simNow) {                  // groggy after a parry: pulsing red, ~6 blinks a second
       const k = 0.5 + 0.5 * Math.sin(simNow * 0.04);
       s.mat.color.setRGB(1, 0.25 + 0.55 * k, 0.25 + 0.55 * k);
-    } else s.mat.color.setRGB(1, 1, 1);
+    } else s.mat.color.setRGB(...(cfg.tint ?? [1, 1, 1]));
     if (this.riposteUntil > simNow) this.knock.set(0, 0, 0);   // groggy: rooted to the spot
     if (this.knock.lengthSq() > 1e-4) {                     // thrown back by a shockwave
       p.addScaledVector(this.knock, dt);
@@ -693,6 +737,7 @@ class Goblin {
     if (this.stagger > 0) {
       this.stagger -= dt;
       this.gazing = false;                                  // a hit breaks the medusa's stare
+      this.bursting = false;
     } else if (!H.dead) {
       // turn to face the hero, but commit once the blow is on its way
       const committed = s.oneShot && s.frame >= cfg.hitFrame - 1;
@@ -745,7 +790,8 @@ class Goblin {
       // medusa: the glob leaves on the lunge frame; the stare lands when the gaze motion ends
       if (s.oneShot?.name === "spit" && s.frame >= cfg.releaseFrame && !this.spat) {
         this.spat = true;
-        spitVenom(this, heroPos);
+        if (this.bursting) { this.bursting = false; venomBurst(this); }
+        else spitVolley(this, heroPos);
       }
       if (this.gazing && s.oneShot?.name !== "gaze") {
         this.gazing = false;
@@ -754,6 +800,10 @@ class Goblin {
     }
     if (move) {
       p.addScaledVector(to, move * cfg.speed * dt);
+      if (cfg.arena) {                                      // the boss keeps to her nest
+        const off = new THREE.Vector3(p.x - this.home.x, 0, p.z - this.home.z);
+        if (off.length() > cfg.arena) { off.setLength(cfg.arena); p.x = this.home.x + off.x; p.z = this.home.z + off.z; }
+      }
       s.state = "run";
     } else {
       s.state = "idle";
@@ -828,7 +878,8 @@ const globs = [], puddles = [];
 
 function spitVenom(m, target) {
   const s = m.sprite;
-  const from = s.root.position.clone().addScaledVector(facingVec(s.facing), 0.3).add(new THREE.Vector3(0, 1.55, 0));
+  const k = m.cfg.scale ?? 1;
+  const from = s.root.position.clone().addScaledVector(facingVec(s.facing), 0.3 * k).add(new THREE.Vector3(0, 1.55 * k, 0));
   const at = target.clone();
   at.y = groundY(at.x, at.z) ?? at.y;
   const T = VENOM.flight + Math.hypot(at.x - from.x, at.z - from.z) * 0.02;   // farther: a little longer in the air
@@ -841,6 +892,50 @@ function spitVenom(m, target) {
   scene.add(glob, mark);
   globs.push({ glob, mark, v, t: 0, T, at, src: m });
   tone(320, 0.12, 0.04, "sawtooth", 180);
+}
+
+// one glob, or for the boss a fan of them spread across the line to the hero
+function spitVolley(m, target) {
+  const cfg = m.cfg;
+  const n = cfg.volley ? (m.raged ? cfg.rageVolley : cfg.volley) : 1;
+  const p = m.sprite.root.position;
+  const side = new THREE.Vector3(target.z - p.z, 0, p.x - target.x).normalize();   // across the line of fire
+  for (let i = 0; i < n; i++) spitVenom(m, target.clone().addScaledVector(side, (i - (n - 1) / 2) * (cfg.volleySpread ?? 0)));
+}
+
+// boss: a red ring round her for the wind-up, then the venom bursts out to that ring
+function burstWarnFx(m) {
+  const cfg = m.cfg, s = m.sprite;
+  const a = s.atlas.anims.dir0_spit;
+  const dur = cfg.releaseFrame / (a.fps * cfg.burstSpeed);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(cfg.burstRadius - 0.25, cfg.burstRadius, 48), fxMaterial("#ff5a4a"));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.copy(s.root.position).add(new THREE.Vector3(0, 0.07, 0));
+  addEffect(ring, dur, (o, k) => {
+    o.position.copy(s.root.position).add(new THREE.Vector3(0, 0.07, 0));
+    o.material.opacity = 0.35 + 0.6 * Math.abs(Math.sin(k * 14));
+  });
+  tone(240, dur, 0.05, "square", 120);
+}
+function venomBurst(m) {
+  const cfg = m.cfg, q = m.sprite.root.position, hp = hero.root.position;
+  const wave = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.0, 48), fxMaterial("#9dff6a"));
+  wave.rotation.x = -Math.PI / 2;
+  wave.position.copy(q).add(new THREE.Vector3(0, 0.1, 0));
+  addEffect(wave, 0.35, (o, k) => { o.scale.setScalar(0.5 + k * cfg.burstRadius); o.material.opacity = 0.95 * (1 - k); });
+  H.shake = Math.max(H.shake, 0.15);
+  if (Math.hypot(hp.x - q.x, hp.z - q.z) < cfg.burstRadius + HERO_RADIUS) {
+    const r = damageHero(cfg.burstDmg, q);
+    if (r === "hit" || r === "blocked") addPoison();
+  }
+}
+
+function bossDefeated(m) {
+  if (typeof progression !== "undefined") progression.onBossKill(m.cfg.reward);   // [progression]
+  const deaths = typeof progression !== "undefined" ? progression.data.deaths : 0;
+  showVictory(`${m.cfg.name} 처치`, `포인트 +${m.cfg.reward} 확보 · 누적 사망 ${deaths}회`);
+  tone(523, 0.3, 0.08, "triangle", 784);
+  setTimeout(() => tone(659, 0.5, 0.08, "triangle", 1046), 260);
 }
 
 function makePuddle(at) {
@@ -925,9 +1020,10 @@ function updatePoison(dt) {
 function gazeFx(m) {
   const s = m.sprite;
   const dur = s.atlas.anims.dir0_gaze.frames.length / (s.atlas.anims.dir0_gaze.fps * m.cfg.gazeSpeed);
-  const star = starMesh(0.8, "#f6ec5a");
+  const size = m.cfg.scale ?? 1;
+  const star = starMesh(0.8 * size, "#f6ec5a");
   addEffect(star, dur, (o, k) => {
-    o.position.copy(s.root.position).add(new THREE.Vector3(0, 1.72, 0)).addScaledVector(facingVec(s.facing), 0.12);
+    o.position.copy(s.root.position).add(new THREE.Vector3(0, 1.72 * size, 0)).addScaledVector(facingVec(s.facing), 0.12 * size);
     o.quaternion.copy(camera.quaternion);
     o.rotateZ(k * 3);
     o.scale.setScalar(0.4 + k * 1.1 + 0.15 * Math.sin(k * 40));
@@ -993,6 +1089,9 @@ async function loadEnemies() {
     tex.needsUpdate = true;
     enemies.push(new Goblin(kind, byKind[kind].atlas, tex, fx, fz));
   }
+  // the queen's nest: the open, level spot in the infected zone nearest ARENA.want
+  ARENA.pos = findArena();
+  const inNest = (x, z) => Math.hypot(x - ARENA.pos.x, z - ARENA.pos.y) < ARENA.clear;   // kept clear of the crowd
   // zombies: scattered over the infected ring (fixed seed, so the same layout every game)
   let seed = 5;
   const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
@@ -1000,7 +1099,7 @@ async function loadEnemies() {
   for (let t = 0; t < 6000 && spots.length < ZOMBIE_COUNT; t++) {
     const x = (rand() * 2 - 1) * 42, z = (rand() * 2 - 1) * 42;
     const r = Math.max(Math.abs(x), Math.abs(z));
-    if (r < 27.5 || r > 42.5 || groundY(x, z) === null) continue;
+    if (r < 27.5 || r > 42.5 || groundY(x, z) === null || inNest(x, z)) continue;
     if (!colliders.every((c) => Math.hypot(x - c.x, z - c.z) > c.r + 0.7)) continue;
     if (!spots.every((q) => Math.hypot(x - q[0], z - q[1]) > 1.6)) continue;
     spots.push([x, z]);
@@ -1016,7 +1115,7 @@ async function loadEnemies() {
   for (let t = 0; t < 4000 && mspots.length < MEDUSA_COUNT; t++) {
     const x = (rand() * 2 - 1) * 40, z = (rand() * 2 - 1) * 40;
     const r = Math.max(Math.abs(x), Math.abs(z));
-    if (r < 30 || r > 40 || groundY(x, z) === null) continue;
+    if (r < 30 || r > 40 || groundY(x, z) === null || inNest(x, z)) continue;
     if (!colliders.every((c) => Math.hypot(x - c.x, z - c.z) > c.r + 0.8)) continue;
     if (!mspots.every((q) => Math.hypot(x - q[0], z - q[1]) > 14)) continue;
     mspots.push([x, z]);
@@ -1026,6 +1125,35 @@ async function loadEnemies() {
     tex.needsUpdate = true;
     enemies.push(new Goblin("medusa", byKind.medusa.atlas, tex, x, z));
   }
+  // the boss, unless she has already been beaten in an earlier run
+  if (!(typeof progression !== "undefined" && progression.data.queenDefeated)) {
+    const tex = byKind.queen.tex.clone();
+    tex.needsUpdate = true;
+    queen = new Goblin("queen", byKind.queen.atlas, tex, ARENA.pos.x, ARENA.pos.y);
+    enemies.push(queen);
+  }
+}
+
+// open (no props within 6 m), level (under 0.8 m of rise across 8 m) ground in the infected zone,
+// as near ARENA.want as possible
+function findArena() {
+  const ok = (x, z) => {
+    const r = Math.max(Math.abs(x), Math.abs(z));
+    if (r < 29 || r > 41) return false;
+    const h = groundY(x, z);
+    if (h === null) return false;
+    for (let a = 0; a < 8; a++) {
+      const hx = groundY(x + Math.cos(a * Math.PI / 4) * 4, z + Math.sin(a * Math.PI / 4) * 4);
+      if (hx === null || Math.abs(hx - h) > 0.8) return false;
+    }
+    return colliders.every((c) => Math.hypot(x - c.x, z - c.z) > c.r + 6);
+  };
+  for (let ring = 0; ring < 16; ring++)
+    for (let a = 0; a < 16; a++) {
+      const x = ARENA.want.x + Math.cos(a * Math.PI / 8) * ring, z = ARENA.want.y + Math.sin(a * Math.PI / 8) * ring;
+      if (ok(x, z)) return new THREE.Vector2(x, z);
+    }
+  return ARENA.want.clone();
 }
 
 // ---------- companion: a papillon that trots along beside the hero (no part in combat) ----------
@@ -1309,7 +1437,10 @@ function killHero() {
   hero.state = "die";
   deathEl.classList.add("show");                // darkens over 2 s (CSS), then YOU DIED fades in
   mouseGuard = false;
-  if (typeof progression !== "undefined") progression.onDeath(deathEl);   // [progression] spend screen
+  if (typeof progression !== "undefined") {     // [progression] carried points stay here, then the spend screen
+    progression.dropStain(hero.root.position);
+    progression.onDeath(deathEl);
+  }
   else setTimeout(() => deathEl.addEventListener("click", () => location.reload(), { once: true }), 2000);
 }
 
@@ -1335,6 +1466,94 @@ function updateHud(dt) {
   }
   hpBarEl.classList.toggle("poisoned", poisoned);
   vignette.className = poisoned ? "poison" : H.petrifyT > 0 ? "stone" : "";
+  updateGoals(dt);
+}
+
+// ---------- goals: area names, the objective arrow, the boss bar, the points stain ----------
+const zoneEl = document.getElementById("zone"), objectiveEl = document.getElementById("objective");
+const bossEl = document.getElementById("boss"), bossFill = document.getElementById("bossFill");
+const toastEl = document.getElementById("toast"), victoryEl = document.getElementById("victory");
+const goal = { zone: "", pending: "", pendingT: 0, stainMarker: null };
+
+function zoneAt(p) {
+  if (ARENA.pos && queen && queen.state !== "dead" && Math.hypot(p.x - ARENA.pos.x, p.z - ARENA.pos.y) < ARENA.clear) return "여왕의 둥지";
+  return Math.max(Math.abs(p.x), Math.abs(p.z)) < 25 ? "고요한 숲" : "감염 지대";
+}
+
+// a name card across the upper middle, Elden Ring style: shown on entering an area
+function showZone(name) {
+  zoneEl.textContent = name;
+  zoneEl.classList.remove("show");
+  void zoneEl.offsetWidth;                         // restart the CSS fade
+  zoneEl.classList.add("show");
+}
+function showToast(text, kind = "") {
+  toastEl.textContent = text;
+  toastEl.className = "";
+  void toastEl.offsetWidth;
+  toastEl.className = `show ${kind}`;
+}
+function showVictory(title, sub) {
+  victoryEl.querySelector("h2").textContent = title;
+  victoryEl.querySelector("p").textContent = sub;
+  victoryEl.className = "";
+  void victoryEl.offsetWidth;
+  victoryEl.className = "show";
+}
+
+function updateGoals(dt) {
+  const p = hero.root.position;
+  // area name: only once the hero has stayed in the new area half a second (no flicker on a border)
+  const z = zoneAt(p);
+  if (z !== goal.zone) {
+    if (z !== goal.pending) { goal.pending = z; goal.pendingT = 0; }
+    goal.pendingT += dt;
+    if (goal.pendingT > 0.5 || !goal.zone) { goal.zone = z; showZone(z); }
+  }
+  // objective: the queen's distance and an arrow pointing at her nest, relative to the camera
+  if (queen && queen.state !== "dead" && ARENA.pos) {
+    const dx = ARENA.pos.x - p.x, dz = ARENA.pos.y - p.z;
+    const fx = p.x - camera.position.x, fz = p.z - camera.position.z;           // the screen's "up" on the ground
+    // clockwise angle from screen-up; screen-right on the ground is (-fz, fx)
+    const ang = Math.atan2(dz * fx - dx * fz, dx * fx + dz * fz);
+    objectiveEl.innerHTML = `<span class="arrow" style="transform: rotate(${ang}rad)">▲</span>목표 · ${queen.cfg.name} 처치 <b>${Math.round(Math.hypot(dx, dz))}m</b>`;
+  } else if (typeof progression !== "undefined" && progression.data.queenDefeated) {
+    objectiveEl.innerHTML = `${GOBLINS.queen.name} 처치 완료 · 누적 사망 ${progression.data.deaths}회`;
+  }
+  // boss bar: while she is awake and the hero is in her nest
+  const fight = queen && queen.alive && p.distanceTo(queen.sprite.root.position) < 30;
+  bossEl.hidden = !fight;
+  if (fight) bossFill.style.width = `${Math.max(0, queen.hp / queen.cfg.hp) * 100}%`;
+  updateStain(dt, p);
+}
+
+// the points left at the last death: a pale gold beam; touching it banks them
+function updateStain(dt, p) {
+  if (typeof progression === "undefined") return;
+  const s = progression.stain();
+  if (!s) { if (goal.stainMarker) { scene.remove(goal.stainMarker); goal.stainMarker = null; } return; }
+  if (!goal.stainMarker) {
+    const g = new THREE.Group();
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, 3.2, 12, 1, true), fxMaterial("#ffe08a"));
+    beam.position.y = 1.6;
+    const core = starMesh(0.9, "#fff3c4");
+    core.position.y = 0.9;
+    g.add(beam, core);
+    g.position.set(s.x, groundY(s.x, s.z) ?? s.y, s.z);
+    scene.add(g);
+    goal.stainMarker = g;
+  }
+  const g = goal.stainMarker, t = performance.now() * 0.001;
+  g.children[0].material.opacity = 0.35 + 0.15 * Math.sin(t * 3);
+  g.children[1].quaternion.copy(camera.quaternion);
+  g.children[1].position.y = 0.9 + 0.15 * Math.sin(t * 2);
+  if (!H.dead && Math.hypot(p.x - s.x, p.z - s.z) < 1.2) {
+    const n = progression.recoverStain();
+    showToast(`포인트 ${n} 회수`, "gold");
+    tone(660, 0.25, 0.07, "triangle", 990);
+    scene.remove(g);
+    goal.stainMarker = null;
+  }
 }
 
 // ---------- special skills (see skills.js): F uses the equipped one, number keys pick it ----------

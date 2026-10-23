@@ -1,7 +1,10 @@
 // Simple growth system (deliberately self-contained, so it can be tuned or removed).
 //
-// - Kills give points: goblins small 0.5, mid 1, large 1.5; zombies 0.5. Points are saved at
-//   once and carry over between runs; one stat level costs 1 point.
+// - Kills give points: goblins small 0.5, mid 1, large 1.5; zombies 0.5, medusa 1. Points earned in
+//   a run are only CARRIED: on death they are left where the hero fell (a glowing stain, data.stain).
+//   Touching it in the next run banks them; dying again first loses them (Souls-style recovery).
+//   Banked points carry over between runs; one stat level costs 1 point. The boss reward is banked
+//   at once.
 // - After death the player spends points on health / attack / defence / stamina / mind and
 //   unlocks special skills (skills.js), then picks "이어서 하기" (keep everything, next run uses
 //   the new stats) or "처음부터 시작" (wipe stats, skills and points). Stats apply when the next
@@ -26,7 +29,10 @@ function defenceMul(n) { return Math.max(0.4, 1 - 0.04 * n); }
 const fmt = (p) => (Number.isInteger(p) ? `${p}` : p.toFixed(1));   // half points show as 2.5
 
 function load() {
-  const empty = { points: 0, hp: 0, atk: 0, def: 0, sta: 0, mind: 0, skills: [], equipped: null };
+  // carried: points earned this run (lost to the stain on death); stain: {x, y, z, points} or null;
+  // deaths: total deaths; queenDefeated: the boss is gone for good once beaten
+  const empty = { points: 0, hp: 0, atk: 0, def: 0, sta: 0, mind: 0, skills: [], equipped: null,
+    carried: 0, stain: null, deaths: 0, queenDefeated: false };
   try {
     return { ...empty, ...JSON.parse(localStorage.getItem(KEY) || "{}") };
   } catch {
@@ -53,6 +59,8 @@ const css = `
 #death.show #spend { opacity: 1; }
 #spend .head { display: flex; justify-content: space-between; margin-bottom: 10px; color: rgba(241, 234, 216, 0.75); }
 #spend .head b { color: #ffd479; font-weight: 600; }
+#spend .note { margin: -4px 0 10px; color: rgba(241, 234, 216, 0.55); font-size: 12px; line-height: 1.6; }
+#spend .note:empty { display: none; }
 #spend h4 { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: rgba(241, 234, 216, 0.6); letter-spacing: 0.04em; }
 #spend .stat, #spend .skill { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 12px;
   padding: 8px 12px; margin-bottom: 6px; background: rgba(241, 234, 216, 0.06); border-radius: 6px; }
@@ -78,7 +86,9 @@ const css = `
 
 export const progression = {
   data: load(),
-  runGain: 0,                     // points earned in this run
+  // points earned in this run (carried, at risk). A page refresh mid-run keeps carrying them.
+  get runGain() { return this.data.carried; },
+  lostStain: 0,                   // points of an old stain lost by dying before reaching it (death screen)
 
   // called once at start: puts saved stats into the combat numbers
   apply(combat, hero) {
@@ -120,10 +130,40 @@ export const progression = {
 
   onKill(kind) {
     const n = POINTS[kind] ?? 0;
-    this.data.points = Math.round((this.data.points + n) * 2) / 2;
-    this.runGain = Math.round((this.runGain + n) * 2) / 2;
+    this.data.carried = Math.round((this.data.carried + n) * 2) / 2;
     save(this.data);
     this.renderHud();
+  },
+
+  // the boss reward is banked at once (losing it to a stain would be too cruel)
+  onBossKill(points) {
+    this.data.points = Math.round((this.data.points + points) * 2) / 2;
+    this.data.queenDefeated = true;
+    save(this.data);
+    this.renderHud();
+  },
+
+  // the points left where the hero last fell, or null
+  stain() { return this.data.stain; },
+  // touching the stain banks its points; returns how many
+  recoverStain() {
+    const s = this.data.stain;
+    if (!s) return 0;
+    this.data.points = Math.round((this.data.points + s.points) * 2) / 2;
+    this.data.stain = null;
+    save(this.data);
+    this.renderHud();
+    return s.points;
+  },
+  // on death: the carried points stay where the hero fell; an unrecovered older stain is lost
+  dropStain(pos) {
+    this.lostStain = this.data.stain?.points ?? 0;
+    const n = this.data.carried;
+    this.data.stain = n > 0 ? { x: pos.x, y: pos.y, z: pos.z, points: n } : null;
+    this.data.dropped = n;
+    this.data.carried = 0;
+    this.data.deaths++;
+    save(this.data);
   },
 
   mountHud() {
@@ -140,7 +180,8 @@ export const progression = {
     const d = this.data;
     this.hud.innerHTML = `<h3>성장</h3>` +
       Object.entries(STATS).map(([k, s]) => `<div class="row"><span>${s.label}</span><b>${d[k]}</b></div>`).join("") +
-      `<div class="row pts"><span>포인트</span><b>${fmt(d.points)}${this.runGain ? ` <span class="gain">(+${fmt(this.runGain)})</span>` : ""}</b></div>`;
+      `<div class="row pts"><span>포인트</span><b>${fmt(d.points)}</b></div>` +
+      (d.carried ? `<div class="row gain"><span>소지</span><b>+${fmt(d.carried)}</b></div>` : "");
   },
 
   // called on death: replaces "click to restart" with the spend screen
@@ -158,7 +199,9 @@ export const progression = {
 
     const render = () => {
       box.innerHTML = `
-        <div class="head"><span>이번 판 획득 <b>+${fmt(this.runGain)}</b></span><span>남은 포인트 <b>${fmt(free)}</b></span></div>
+        <div class="head"><span>${this.data.dropped ? `쓰러진 자리에 <b>+${fmt(this.data.dropped)}</b> 남김` : "남긴 포인트 없음"}</span><span>남은 포인트 <b>${fmt(free)}</b></span></div>
+        <div class="note">${this.data.dropped ? "다음 판에 쓰러진 자리의 빛에 닿으면 되찾습니다. 그 전에 또 쓰러지면 잃습니다." : ""}
+          ${this.lostStain ? `<br>되찾지 못한 이전 흔적의 ${fmt(this.lostStain)} 포인트를 잃었습니다.` : ""}</div>
         ${Object.entries(STATS).map(([k, s]) => {
           const lv = this.data[k] + pending[k];
           return `<div class="stat" data-k="${k}">
